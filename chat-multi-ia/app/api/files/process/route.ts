@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import JSZip from 'jszip'
 import {
   CODE_EXTENSIONS,
-  IMAGE_EXTENSIONS,
   TEXT_EXTENSIONS,
   extensionOf,
   fileKindFromName,

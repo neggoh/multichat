@@ -4,8 +4,9 @@
 Chat multi-modelo via OpenRouter (openrouter.ai), com troca de modelo no meio da conversa sem perder o histórico. Interface 100% em português do Brasil.
 
 ## Decisões de arquitetura
-- **Chave de API do OpenRouter vive apenas no `localStorage`** do navegador (`chat-multi-ia:api-key`). Nunca gravar a chave no banco, em `.env` ou no código. O client envia a chave no corpo do POST para `/api/chat`, que a repassa ao OpenRouter.
+- **Chave de API do OpenRouter vive apenas no servidor** (`OPENROUTER_API_KEY` no `.env`, lida em `app/api/chat`). Nunca gravar a chave no banco, no `localStorage` ou no código; o navegador nunca a recebe.
 - Identidade sem login: `clientId` (UUID) gerado no navegador e salvo em `chat-multi-ia:client-id`; escopa as conversas no banco.
+- Toda rota de conversa (`/api/conversations/[id]`, `/api/chat`) filtra por `clientId`; uma conversa de outro navegador é tratada como inexistente.
 - Modelo escolhido persistido em `chat-multi-ia:model`.
 - `/api/models` busca `https://openrouter.ai/api/v1/models`, filtra `pricing.prompt === "0" && pricing.completion === "0"` e apenas modelos texto→texto (usa `architecture.output_modalities`); fallback em `FALLBACK_MODELS` (`lib/chat-types.ts`).
 - `/api/chat` faz proxy com streaming SSE próprio (`data: {"type":"meta"|"delta"|"error"|"done"}`), acumula o texto e persiste user+assistant no Prisma ao final. Conversas criadas e não concluídas são apagadas para não deixar histórico vazio.

@@ -98,6 +98,7 @@ function uploadAndProcess(file: File, onProgress: (percent: number) => void): Pr
  * renderizado depois de montado), por isso o SSR não enxerga este valor.
  */
 function readClientId(): string {
+  if (typeof window === 'undefined') return ''
   try {
     const stored = window.localStorage.getItem(CLIENT_ID_STORAGE) ?? ''
     if (stored) return stored
@@ -268,7 +269,9 @@ export function ChatApp() {
       if (!id || id === conversationId || isStreaming) return
       setLoadingConversation(true)
       try {
-        const response = await fetch(`/api/conversations/${id}`, { cache: 'no-store' })
+        const response = await fetch(`/api/conversations/${id}?clientId=${encodeURIComponent(clientId)}`, {
+          cache: 'no-store',
+        })
         if (!response.ok) throw new Error('Não foi possível carregar a conversa.')
         const payload: any = await response.json().catch(() => null)
         const loaded: any[] = Array.isArray(payload?.conversation?.messages) ? payload.conversation.messages : []
@@ -297,14 +300,16 @@ export function ChatApp() {
         setLoadingConversation(false)
       }
     },
-    [conversationId, isStreaming, models]
+    [conversationId, isStreaming, models, clientId]
   )
 
   const handleDeleteConversation = useCallback(
     async (id: string) => {
       if (!id) return
       try {
-        const response = await fetch(`/api/conversations/${id}`, { method: 'DELETE' })
+        const response = await fetch(`/api/conversations/${id}?clientId=${encodeURIComponent(clientId)}`, {
+          method: 'DELETE',
+        })
         if (!response.ok) throw new Error('Falha ao apagar')
         setConversations((previous) => previous.filter((item) => item?.id !== id))
         if (id === conversationId) {
@@ -317,7 +322,7 @@ export function ChatApp() {
         toast.error('Não foi possível apagar a conversa.')
       }
     },
-    [conversationId]
+    [conversationId, clientId]
   )
 
   /* ------------------------------- arquivos -------------------------------- */

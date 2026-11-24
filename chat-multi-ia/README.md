@@ -76,6 +76,7 @@ prisma/schema.prisma   Conversation e Message
 - A chave do OpenRouter **nunca** é gravada no banco, no `.env` do repositório ou no `localStorage` — ela só existe no servidor.
 - Caminhos de arquivo vindos do navegador são higienizados antes de entrar no ZIP (`sanitizeFileName`), então `..` não escapa da raiz do arquivo gerado.
 - `.env` está no `.gitignore`; use `.env.example` como modelo.
+- Conversas são sempre filtradas pelo `clientId` do navegador: ler, renomear ou apagar uma conversa de outro cliente retorna 404.
 
 ## Licença
 

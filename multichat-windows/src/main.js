@@ -19,6 +19,8 @@ const DEFAULT_MODEL = 'deepseek/deepseek-chat-v3-0324:free'
 const dataDir = () => app.getPath('userData')
 const storePath = () => path.join(dataDir(), 'multichat.json')
 
+const activeRequests = new Map()
+
 function readStore() {
   try {
     return JSON.parse(fs.readFileSync(storePath(), 'utf8'))
@@ -142,16 +144,19 @@ ipcMain.handle('models:list', async () => {
 
 ipcMain.handle('chat:stream', async (event, request) => {
   const { requestId, model, messages } = request ?? {}
+  const controller = new AbortController()
+  activeRequests.set(requestId, controller)
+  let text = ''
   try {
     const response = await openRouterFetch('/chat/completions', {
       method: 'POST',
       body: JSON.stringify({ model: model || DEFAULT_MODEL, stream: true, messages }),
+      signal: controller.signal,
     })
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    let text = ''
 
     while (true) {
       const { done, value } = await reader.read()
@@ -180,8 +185,16 @@ ipcMain.handle('chat:stream', async (event, request) => {
     }
     return { ok: true, text }
   } catch (error) {
+    if (error.name === 'AbortError') return { ok: true, text, aborted: true }
     return { ok: false, error: error.message }
+  } finally {
+    activeRequests.delete(requestId)
   }
+})
+
+ipcMain.handle('chat:abort', (_event, requestId) => {
+  activeRequests.get(requestId)?.abort()
+  return { ok: true }
 })
 
 ipcMain.handle('key:status', () => {
@@ -196,7 +209,7 @@ ipcMain.handle('key:status', () => {
 ipcMain.handle('key:save', (_event, key) => saveApiKey(key))
 
 ipcMain.handle('app:openExternal', (_event, url) => {
-  if (/^https:\/\/(openrouter\.ai|github\.com)\//.test(String(url))) shell.openExternal(url)
+  if (/^https?:\/\//i.test(String(url))) shell.openExternal(url)
 })
 
 /* ---------------------------------- janela ---------------------------------- */

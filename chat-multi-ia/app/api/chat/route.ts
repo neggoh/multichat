@@ -118,8 +118,8 @@ export async function POST(request: Request) {
   if (clientId) {
     try {
       if (conversationId) {
-        const existing = await prisma.conversation.findUnique({
-          where: { id: conversationId },
+        const existing = await prisma.conversation.findFirst({
+          where: { id: conversationId, clientId },
           select: { id: true },
         })
         if (!existing) conversationId = null
@@ -145,6 +145,7 @@ export async function POST(request: Request) {
   try {
     upstream = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
+      signal: request.signal,
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
@@ -202,6 +203,8 @@ export async function POST(request: Request) {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
 
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let accumulated = ''
@@ -209,13 +212,17 @@ export async function POST(request: Request) {
       let streamError: string | null = null
 
       const send = (payload: Record<string, unknown>) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
+        } catch {
+          // Cliente já desconectou: o enqueue lança e não há mais para onde enviar.
+        }
       }
 
       send({ type: 'meta', conversationId, model })
 
       try {
-        const reader = upstream.body?.getReader()
+        reader = upstream.body?.getReader() ?? null
         if (!reader) throw new Error('Resposta do OpenRouter sem corpo para leitura')
 
         while (true) {
@@ -258,8 +265,12 @@ export async function POST(request: Request) {
           if (streamError) break
         }
       } catch (error) {
-        console.error('[api/chat] Erro durante o streaming:', error)
-        streamError = 'A conexão com o modelo foi interrompida. Tente novamente.'
+        if (request.signal.aborted || (error as { name?: string })?.name === 'AbortError') {
+          // Cliente cancelou o streaming: não é erro de conexão, só encerra o loop.
+        } else {
+          console.error('[api/chat] Erro durante o streaming:', error)
+          streamError = 'A conexão com o modelo foi interrompida. Tente novamente.'
+        }
       }
 
       if (streamError) {
@@ -305,6 +316,9 @@ export async function POST(request: Request) {
 
       send({ type: 'done', conversationId, messageId: savedMessageId })
       controller.close()
+    },
+    cancel() {
+      reader?.cancel().catch(() => {})
     },
   })
 

@@ -1,0 +1,26 @@
+# dependências
+node_modules/
+
+# builds
+.next/
+.build/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+# o ícone do electron-builder fica versionado
+!multichat-windows/build/
+
+# ambiente — NUNCA comitar
+.env
+.env.*
+!.env.example
+
+# logs e misc
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

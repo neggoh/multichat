@@ -33,6 +33,7 @@ const els = {
   status: $('status'),
   dialog: $('key-dialog'),
   keyInput: $('key-input'),
+  keySave: $('key-save'),
   keyError: $('key-error'),
   keysLink: $('keys-link'),
 }
@@ -110,6 +111,9 @@ function renderMarkdown(source) {
         html += `<div style="font-weight:650;font-size:${20 - heading[1].length * 2}px;margin:10px 0 6px">${inline(heading[2])}</div>`
       } else if (/^\s*[-*]\s+/.test(line)) {
         html += `<div style="padding-left:14px">• ${inline(line.replace(/^\s*[-*]\s+/, ''))}</div>`
+      } else if (/^\s*\d+[.)]\s+/.test(line)) {
+        const marker = /^\s*(\d+)[.)]\s+/.exec(line)
+        html += `<div style="padding-left:14px">${marker[1]}. ${inline(line.replace(/^\s*\d+[.)]\s+/, ''))}</div>`
       } else {
         html += `${inline(line)}\n`
       }
@@ -304,11 +308,14 @@ async function send() {
   state.streaming = false
   els.send.disabled = false
   els.stop.hidden = true
+  els.stop.disabled = false
   setStatus('')
 
   if (!result.ok) {
     assistant.content = assistant.content || `⚠️ ${result.error}`
     setStatus(result.error)
+  } else if (result.aborted && !assistant.content) {
+    assistant.content = '*Geração interrompida.*'
   }
   conversation.updatedAt = Date.now()
   saveState()
@@ -317,11 +324,10 @@ async function send() {
 }
 
 function stop() {
-  state.requestId = ++state.requestId
-  state.streaming = false
-  els.send.disabled = false
-  els.stop.hidden = true
-  setStatus('interrompido')
+  if (!state.streaming) return
+  els.stop.disabled = true
+  setStatus('interrompendo...')
+  api.abort(state.requestId)
 }
 
 /* ------------------------------ chave do OpenRouter ------------------------------ */
@@ -404,6 +410,12 @@ function bind() {
     }
   })
   els.messages.addEventListener('click', (event) => {
+    const anchor = event.target.closest('a[href]')
+    if (anchor) {
+      event.preventDefault()
+      api.openExternal(anchor.href)
+      return
+    }
     const button = event.target.closest('button.copy')
     if (!button) return
     const code = button.parentElement.querySelector('code')?.textContent ?? ''
@@ -416,9 +428,7 @@ function bind() {
     event.preventDefault()
     api.openExternal('https://openrouter.ai/keys')
   })
-  els.dialog.addEventListener('close', () => {
-    if (els.dialog.returnValue === 'save') saveKey()
-  })
+  els.keySave.addEventListener('click', saveKey)
   els.keyInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault()
