@@ -16,6 +16,8 @@
 }
 
 * { box-sizing: border-box; }
+/* Regras de display por classe não podem anular o atributo hidden. */
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -185,7 +187,7 @@ footer.composer { padding: 10px 0 16px; border-top: 1px solid var(--line); backg
 kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
 
 /* --------------------------------- anexos ----------------------------------- */
-.icon-btn.attach { flex: none; width: 30px; height: 30px; font-size: 14px; }
+.icon-btn.attach { flex: none; width: 26px; height: 26px; font-size: 13px; margin-bottom: 2px; }
 .attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .attach-chip {
   display: inline-flex; align-items: center; gap: 7px;
@@ -209,18 +211,6 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); 
 
 .msg .attachments { margin: 8px 0 0; }
 .msg .attach-chip { background: #ffffff08; }
-
-.drop-overlay {
-  position: fixed; inset: 0; z-index: 40;
-  display: grid; place-items: center;
-  background: #05040acc; backdrop-filter: blur(3px);
-  pointer-events: none;
-}
-.drop-overlay div {
-  padding: 26px 34px; border-radius: 16px;
-  border: 2px dashed var(--primary); color: var(--text);
-  font-weight: 600; background: var(--panel);
-}
 
 /* ---------------------------------- modal ----------------------------------- */
 dialog {

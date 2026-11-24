@@ -34,7 +34,6 @@ const els = {
   status: $('status'),
   attach: $('attach-btn'),
   attachments: $('attachments'),
-  dropOverlay: $('drop-overlay'),
   dialog: $('key-dialog'),
   keyInput: $('key-input'),
   keySave: $('key-save'),
@@ -534,22 +533,6 @@ function applyProcessed(result) {
   renderAttachments()
 }
 
-async function addFiles(paths) {
-  const list = (Array.isArray(paths) ? paths : []).filter(Boolean)
-  if (list.length === 0 || state.attaching) return
-  state.attaching = true
-  els.attach.disabled = true
-  setStatus('lendo anexos...')
-  try {
-    applyProcessed(await api.processFiles(list))
-  } catch (error) {
-    setStatus(error?.message ?? 'não foi possível ler os anexos')
-  } finally {
-    state.attaching = false
-    els.attach.disabled = false
-  }
-}
-
 async function attachFromDialog() {
   if (state.attaching) return
   state.attaching = true
@@ -640,36 +623,6 @@ function bind() {
       event.preventDefault()
       saveKey()
     }
-  })
-
-  let dragDepth = 0
-  const hasFiles = (event) => Array.from(event.dataTransfer?.types ?? []).includes('Files')
-
-  document.addEventListener('dragenter', (event) => {
-    if (!hasFiles(event)) return
-    dragDepth += 1
-    els.dropOverlay.hidden = false
-  })
-  document.addEventListener('dragover', (event) => {
-    if (hasFiles(event)) event.preventDefault()
-  })
-  document.addEventListener('dragleave', () => {
-    dragDepth = Math.max(0, dragDepth - 1)
-    if (dragDepth === 0) els.dropOverlay.hidden = true
-  })
-  document.addEventListener('drop', (event) => {
-    if (!event.dataTransfer?.files?.length) return
-    event.preventDefault()
-    dragDepth = 0
-    els.dropOverlay.hidden = true
-    const paths = Array.from(event.dataTransfer.files)
-      .map((file) => api.pathForFile(file))
-      .filter(Boolean)
-    if (paths.length === 0) {
-      setStatus('não foi possível ler os arquivos arrastados')
-      return
-    }
-    addFiles(paths)
   })
 }
 

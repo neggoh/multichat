@@ -1,7 +1,7 @@
 {
   "name": "multichat-windows",
   "productName": "MultiChat",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Aplicativo de desktop (Windows) para o Chat Multi-IA: conversa com os modelos gratuitos do OpenRouter sem precisar de servidor.",
   "main": "src/main.js",
