@@ -20,6 +20,7 @@ const $ = (id) => document.getElementById(id)
 const els = {
   model: $('model'),
   modelInfo: $('model-info'),
+  quota: $('quota'),
   freeOnly: $('free-only'),
   keyChip: $('key-chip'),
   keyBtn: $('key-btn'),
@@ -182,6 +183,23 @@ function renderModels() {
   els.model.value = state.selectedModel
   els.modelInfo.textContent = modelLabel(state.models.find((m) => m.id === state.selectedModel))
   els.freeOnly.checked = state.freeOnly
+}
+
+function renderQuota(rateLimit) {
+  const remaining = Number(rateLimit?.remaining)
+  const limit = Number(rateLimit?.limit)
+  if (!Number.isFinite(remaining)) {
+    els.quota.hidden = true
+    return
+  }
+  const total = Number.isFinite(limit) && limit > 0 ? limit : 50
+  els.quota.hidden = false
+  els.quota.textContent = `grátis hoje: ${remaining}/${total}`
+  els.quota.className = `chip ${remaining > 0 ? 'ok' : 'warn'}`
+  els.quota.title =
+    remaining > 0
+      ? 'Requisições gratuitas restantes hoje no OpenRouter'
+      : 'Cota diária de modelos gratuitos esgotada; renova à meia-noite UTC'
 }
 
 function attachmentChip(attachment, onRemove) {
@@ -472,6 +490,7 @@ async function send() {
   } else if (result.aborted && !assistant.content) {
     assistant.content = '*Geração interrompida.*'
   }
+  if (result.rateLimit) renderQuota(result.rateLimit)
   conversation.updatedAt = Date.now()
   saveState()
   renderMessages()

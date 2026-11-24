@@ -104,17 +104,34 @@ async function openRouterFetch(pathname, init = {}) {
     } catch {
       detail = ''
     }
-    const error = new Error(friendlyError(response.status, detail))
+    const error = new Error(friendlyError(response.status, detail, response.headers))
     error.status = response.status
+    error.detail = detail
+    error.remaining = Number(response.headers.get('x-ratelimit-remaining') ?? NaN)
+    error.reset = Number(response.headers.get('x-ratelimit-reset') ?? NaN)
     throw error
   }
   return response
 }
 
-function friendlyError(status, detail) {
+function resetLabel(reset) {
+  const value = Number(reset)
+  if (!Number.isFinite(value) || value <= 0) return ''
+  return new Date(value).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+}
+
+function friendlyError(status, detail, headers) {
   if (status === 401) return 'A chave do OpenRouter é inválida ou expirou.'
-  if (status === 402) return 'A conta do OpenRouter está sem créditos para este modelo.'
-  if (status === 429) return 'Muitas requisições em pouco tempo. Aguarde alguns segundos.'
+  if (status === 402) {
+    return `Este modelo é pago e a conta do OpenRouter está sem créditos. Escolha um modelo gratuito no seletor. ${detail}`.trim()
+  }
+  if (status === 429) {
+    const when = resetLabel(headers?.get?.('x-ratelimit-reset'))
+    if (/free-models-per-day/i.test(detail)) {
+      return `Limite diário de modelos gratuitos atingido (50 por dia).${when ? ` Renova em ${when}.` : ''} Adicionar 10 créditos no OpenRouter libera 1000 requisições gratuitas por dia.`
+    }
+    return `Muitas requisições em pouco tempo.${when ? ` Tente novamente após ${when}.` : ' Aguarde alguns segundos.'}`
+  }
   if (status === 404 || status === 400) return `O modelo não aceitou a requisição (${status}). ${detail}`.trim()
   return `O OpenRouter retornou um erro (${status}). ${detail}`.trim()
 }
@@ -204,11 +221,30 @@ ipcMain.handle('chat:stream', async (event, request) => {
   activeRequests.set(requestId, controller)
   let text = ''
   try {
-    const response = await openRouterFetch('/chat/completions', {
-      method: 'POST',
-      body: JSON.stringify({ model: model || DEFAULT_MODEL, stream: true, messages }),
-      signal: controller.signal,
-    })
+    const payload = { model: model || DEFAULT_MODEL, stream: true, messages }
+    let response = null
+    let attempt = 0
+    while (!response) {
+      try {
+        response = await openRouterFetch('/chat/completions', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        })
+      } catch (error) {
+        // 429 com cota restante é limite por minuto: vale repetir. Cota diária zerada não.
+        const retryable = error.status === 429 && error.remaining > 0 && attempt < 2
+        if (!retryable) throw error
+        attempt += 1
+        await new Promise((resolve) => setTimeout(resolve, 1500 * attempt))
+      }
+    }
+
+    const rateLimit = {
+      limit: Number(response.headers.get('x-ratelimit-limit') ?? NaN),
+      remaining: Number(response.headers.get('x-ratelimit-remaining') ?? NaN),
+      reset: Number(response.headers.get('x-ratelimit-reset') ?? NaN),
+    }
 
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
@@ -239,10 +275,18 @@ ipcMain.handle('chat:stream', async (event, request) => {
         }
       }
     }
-    return { ok: true, text }
+    return { ok: true, text, rateLimit }
   } catch (error) {
     if (error.name === 'AbortError') return { ok: true, text, aborted: true }
-    return { ok: false, error: error.message }
+    return {
+      ok: false,
+      error: error.message,
+      status: error.status ?? null,
+      rateLimit:
+        Number.isFinite(error.remaining) || Number.isFinite(error.reset)
+          ? { remaining: error.remaining, reset: error.reset }
+          : null,
+    }
   } finally {
     activeRequests.delete(requestId)
   }
