@@ -18,6 +18,7 @@ const SYSTEM_PROMPT = [
 
 const $ = (id) => document.getElementById(id)
 const els = {
+  provider: $('provider'),
   model: $('model'),
   modelInfo: $('model-info'),
   quota: $('quota'),
@@ -40,6 +41,9 @@ const els = {
   keySave: $('key-save'),
   keyError: $('key-error'),
   keysLink: $('keys-link'),
+  localUrl: $('local-url'),
+  localStatus: $('local-status'),
+  localTest: $('local-test'),
 }
 
 const state = {
@@ -51,6 +55,8 @@ const state = {
   requestId: 0,
   hasKey: false,
   freeOnly: true,
+  provider: 'openrouter',
+  localBaseUrl: 'http://127.0.0.1:8080/v1',
   attachments: [],
   attaching: false,
 }
@@ -175,14 +181,18 @@ function visibleModels() {
 }
 
 function renderModels() {
-  const list = visibleModels()
+  const local = state.provider === 'local'
+  const freeToggle = els.freeOnly.closest('.toggle')
+  if (freeToggle) freeToggle.hidden = local
+  const list = local ? state.models : visibleModels()
   els.model.innerHTML = list
-    .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.free ? m.name : `${m.name} — pago`)}</option>`)
+    .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.free && !local ? m.name : local ? m.name : `${m.name} — pago`)}</option>`)
     .join('')
   if (!list.some((m) => m.id === state.selectedModel)) state.selectedModel = list[0]?.id ?? state.models[0]?.id ?? ''
   els.model.value = state.selectedModel
-  els.modelInfo.textContent = modelLabel(state.models.find((m) => m.id === state.selectedModel))
+  els.modelInfo.textContent = local ? 'local · sem limite' : modelLabel(state.models.find((m) => m.id === state.selectedModel))
   els.freeOnly.checked = state.freeOnly
+  if (local) els.quota.hidden = true
 }
 
 function renderQuota(rateLimit) {
@@ -436,13 +446,13 @@ async function send() {
   const text = els.input.value.trim()
   const attachments = state.attachments.slice()
   if ((!text && attachments.length === 0) || state.streaming) return
-  if (!state.hasKey) {
+  if (state.provider !== 'local' && !state.hasKey) {
     openKeyDialog()
     return
   }
 
   const model = state.models.find((item) => item.id === state.selectedModel)
-  if (attachments.some((attachment) => attachment.kind === 'image') && !model?.vision) {
+  if (state.provider !== 'local' && attachments.some((attachment) => attachment.kind === 'image') && !model?.vision) {
     setStatus('o modelo atual não aceita imagem — escolha um modelo com visão')
     return
   }
@@ -568,17 +578,34 @@ async function attachFromDialog() {
   }
 }
 
-async function loadModels() {
-  setStatus('carregando modelos...')
-  const result = await api.models()
+async function loadModels(provider) {
+  const target = provider ?? state.provider
+  setStatus(target === 'local' ? 'procurando a IA local...' : 'carregando modelos...')
+  const result = await api.models({ provider: target })
   if (result.ok && result.models.length > 0) {
     state.models = result.models
+    state.provider = target
+    els.provider.value = target
     renderModels()
-    setStatus(`${result.models.length} modelos · ${result.freeCount ?? 0} gratuitos`)
+    setStatus(
+      target === 'local'
+        ? `IA local · ${result.models.length} modelo(s) · sem limite`
+        : `${result.models.length} modelos · ${result.freeCount ?? 0} gratuitos`
+    )
   } else {
-    state.models = FALLBACK_MODELS
-    renderModels()
-    setStatus(result.error ?? 'usando lista local de modelos')
+    if (target === 'local') {
+      state.models = []
+      state.provider = 'local'
+      els.provider.value = 'local'
+      renderModels()
+      setStatus(result.error ?? 'IA local indisponível')
+    } else {
+      state.models = FALLBACK_MODELS
+      state.provider = 'openrouter'
+      els.provider.value = 'openrouter'
+      renderModels()
+      setStatus(result.error ?? 'usando lista local de modelos')
+    }
   }
   renderMessages()
 }
@@ -605,10 +632,34 @@ function bind() {
   })
   els.model.addEventListener('change', () => {
     state.selectedModel = els.model.value
-    els.modelInfo.textContent = modelLabel(state.models.find((m) => m.id === state.selectedModel))
+    els.modelInfo.textContent =
+      state.provider === 'local' ? 'local · sem limite' : modelLabel(state.models.find((m) => m.id === state.selectedModel))
     const conversation = current()
     if (conversation) conversation.model = state.selectedModel
     saveState()
+    if (state.provider === 'local') api.saveSettings({ localModel: state.selectedModel })
+  })
+  els.provider.addEventListener('change', async () => {
+    const next = els.provider.value === 'local' ? 'local' : 'openrouter'
+    await api.saveSettings({ provider: next })
+    await loadModels(next)
+  })
+  els.localTest.addEventListener('click', async () => {
+    const url = els.localUrl.value.trim() || 'http://127.0.0.1:8080/v1'
+    els.localStatus.className = 'local-status'
+    els.localStatus.textContent = 'testando...'
+    await api.saveSettings({ provider: 'local', localBaseUrl: url })
+    const result = await api.models({ provider: 'local' })
+    if (result.ok && result.models.length > 0) {
+      els.localStatus.className = 'local-status ok'
+      els.localStatus.textContent = `conectado · ${result.models.length} modelo(s)`
+      state.localBaseUrl = url
+      await loadModels('local')
+      els.dialog.close()
+    } else {
+      els.localStatus.className = 'local-status err'
+      els.localStatus.textContent = result.error ?? 'não foi possível conectar'
+    }
   })
   els.input.addEventListener('input', autoGrow)
   els.input.addEventListener('keydown', (event) => {
@@ -669,7 +720,15 @@ async function boot() {
   refreshKeyChip()
   if (status.plain) setStatus('atenção: a chave está salva sem criptografia')
 
-  if (state.hasKey) await loadModels()
+  const settings = await api.settings()
+  state.provider = settings.provider === 'local' ? 'local' : 'openrouter'
+  state.localBaseUrl = settings.localBaseUrl ?? state.localBaseUrl
+  els.provider.value = state.provider
+  els.localUrl.value = state.localBaseUrl
+  if (settings.model) state.selectedModel = settings.model
+  await loadModels(state.provider)
+
+  if (state.hasKey) await loadModels('openrouter')
   else {
     renderModels()
     setStatus('configure a chave do OpenRouter')

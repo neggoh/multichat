@@ -3,7 +3,9 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('multichat', {
-  models: () => ipcRenderer.invoke('models:list'),
+  models: (options) => ipcRenderer.invoke('models:list', options),
+  settings: () => ipcRenderer.invoke('settings:get'),
+  saveSettings: (next) => ipcRenderer.invoke('settings:save', next),
   chat: (request) => ipcRenderer.invoke('chat:stream', request),
   abort: (requestId) => ipcRenderer.invoke('chat:abort', requestId),
   onDelta: (callback) => {

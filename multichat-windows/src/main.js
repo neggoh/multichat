@@ -20,6 +20,7 @@ const {
 
 const OPENROUTER = 'https://openrouter.ai/api/v1'
 const DEFAULT_MODEL = 'deepseek/deepseek-chat-v3-0324:free'
+const DEFAULT_LOCAL_BASE = 'http://127.0.0.1:8080/v1'
 
 const dataDir = () => app.getPath('userData')
 const storePath = () => path.join(dataDir(), 'multichat.json')
@@ -136,7 +137,86 @@ function friendlyError(status, detail, headers) {
   return `O OpenRouter retornou um erro (${status}). ${detail}`.trim()
 }
 
-ipcMain.handle('models:list', async () => {
+function providerSettings() {
+  const store = readStore()
+  const provider = store.provider === 'local' ? 'local' : 'openrouter'
+  const base = String(store.localBaseUrl ?? DEFAULT_LOCAL_BASE).trim().replace(/\/+$/, '') || DEFAULT_LOCAL_BASE
+  return { provider, base, model: String(store.localModel ?? '') }
+}
+
+/** Fala com a IA local (llama.cpp, Ollama, LM Studio) ou com o OpenRouter. */
+async function providerFetch(pathname, init = {}) {
+  const settings = providerSettings()
+  if (settings.provider !== 'local') return openRouterFetch(pathname, init)
+
+  let response
+  try {
+    response = await fetch(`${settings.base}${pathname}`, {
+      ...init,
+      headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+    })
+  } catch (error) {
+    const failure = new Error(
+      `Não foi possível falar com a IA local em ${settings.base}. Confira se o servidor está rodando. (${error.message})`
+    )
+    failure.status = 0
+    throw failure
+  }
+
+  if (!response.ok) {
+    let detail = ''
+    try {
+      const payload = await response.json()
+      detail = payload?.error?.message ?? (typeof payload?.error === 'string' ? payload.error : '')
+    } catch {
+      detail = ''
+    }
+    const failure = new Error(`A IA local respondeu com erro (${response.status}). ${detail}`.trim())
+    failure.status = response.status
+    throw failure
+  }
+  return response
+}
+
+async function listLocalModels() {
+  const settings = providerSettings()
+  try {
+    const response = await fetch(`${settings.base}/models`, { headers: { Accept: 'application/json' } })
+    if (!response.ok) throw new Error(`status ${response.status}`)
+    const payload = await response.json()
+    const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : []
+    const models = list
+      .map((model) => {
+        const id = String(model?.id ?? model?.name ?? model?.model ?? '')
+        return {
+          id,
+          name: String(model?.name ?? id),
+          context: null,
+          vision: false,
+          free: true,
+          promptPrice: 0,
+          completionPrice: 0,
+        }
+      })
+      .filter((model) => model.id.length > 0)
+      .sort((a, b) => a.name.localeCompare(b.name))
+    if (models.length === 0) throw new Error('o servidor não listou nenhum modelo')
+    return { ok: true, models, freeCount: models.length, provider: 'local' }
+  } catch (error) {
+    return {
+      ok: false,
+      error: `IA local indisponível em ${settings.base}: ${error.message}`,
+      provider: 'local',
+      models: [],
+    }
+  }
+}
+
+ipcMain.handle('models:list', async (_event, options) => {
+  const requested = options?.provider
+  const provider = requested === 'local' || requested === 'openrouter' ? requested : providerSettings().provider
+  if (provider === 'local') return listLocalModels()
+
   try {
     // O catálogo do OpenRouter é público: a lista aparece antes de configurar a chave.
     const response = await fetch(`${OPENROUTER}/models`, {
@@ -169,10 +249,21 @@ ipcMain.handle('models:list', async () => {
       .sort((a, b) => (a.free === b.free ? a.name.localeCompare(b.name) : a.free ? -1 : 1))
 
     if (models.length === 0) throw new Error('O OpenRouter não retornou nenhum modelo de texto.')
-    return { ok: true, models, freeCount: models.filter((model) => model.free).length }
+    return { ok: true, models, freeCount: models.filter((model) => model.free).length, provider: 'openrouter' }
   } catch (error) {
-    return { ok: false, error: error.message }
+    return { ok: false, error: error.message, provider: 'openrouter' }
   }
+})
+
+ipcMain.handle('settings:get', () => providerSettings())
+
+ipcMain.handle('settings:save', (_event, next) => {
+  const store = readStore()
+  if (next?.provider === 'local' || next?.provider === 'openrouter') store.provider = next.provider
+  if (typeof next?.localBaseUrl === 'string') store.localBaseUrl = next.localBaseUrl.trim()
+  if (typeof next?.localModel === 'string') store.localModel = next.localModel
+  writeStore(store)
+  return { ok: true, ...providerSettings() }
 })
 
 /* ---------------------------------- anexos ---------------------------------- */
@@ -226,7 +317,7 @@ ipcMain.handle('chat:stream', async (event, request) => {
     let attempt = 0
     while (!response) {
       try {
-        response = await openRouterFetch('/chat/completions', {
+        response = await providerFetch('/chat/completions', {
           method: 'POST',
           body: JSON.stringify(payload),
           signal: controller.signal,

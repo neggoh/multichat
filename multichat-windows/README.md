@@ -10,6 +10,40 @@ Aplicativo de desktop para Windows que reúne vários modelos de IA em uma só c
 
 O seletor lista **todos** os modelos de texto do OpenRouter (hoje ~450), com os gratuitos no topo e marcados. A caixa **só grátis** (ligada por padrão) restringe a lista aos modelos de preço zero; desligue-a para usar os pagos, que aparecem com o preço por milhão de tokens de entrada no chip ao lado do seletor. Modelos com visão aceitam imagem anexada.
 
+## IA local, sem limite
+
+O seletor **OpenRouter / IA local** no topo troca a origem das respostas. No modo local o app fala com qualquer servidor compatível com OpenAI rodando na sua máquina — llama.cpp, Ollama ou LM Studio — sem chave, sem cota e sem internet.
+
+Para montar tudo com um comando (baixa o llama.cpp e um modelo GGUF pequeno):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\local-ai.ps1
+```
+
+Depois, no app: seletor do topo → **IA local** → **Testar e usar**. O endereço padrão é `http://127.0.0.1:8080/v1` e pode ser trocado no diálogo da chave.
+
+Modelos disponíveis no script:
+
+| Nome | Tamanho | Para quê |
+|------|---------|----------|
+| `qwen2.5-0.5b` | 0,4 GB | respostas rápidas em máquina fraca |
+| `qwen2.5-1.5b` | 1,1 GB | uso geral (padrão) |
+| `qwen2.5-3b` | 1,9 GB | uso geral com mais qualidade |
+| `qwen2.5-coder-1.5b` | 1,1 GB | código, rápido |
+| `qwen2.5-coder-3b` | 1,9 GB | código, equilíbrio |
+| `qwen2.5-coder-7b` | 4,7 GB | **código, o mais forte** — criação e correção de projetos |
+
+Para programar, use o Coder 7B:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\local-ai.ps1 -Model qwen2.5-coder-7b
+```
+
+O Qwen2.5-Coder foi treinado em 5,5 trilhões de tokens de código e é bem melhor que o modelo generalista em gerar, explicar e corrigir código. Em CPU sem AVX2, como um i7-3770, o 7B roda em ~4 threads e responde devagar (alguns tokens por segundo), mas funciona; o 3B é o meio-termo para máquinas assim.
+
+Se você já usa Ollama, basta apontar para `http://127.0.0.1:11434/v1`; no LM Studio, `http://127.0.0.1:1234/v1`.
+
+
 ## Anexos
 
 | Tipo | O que é extraído |

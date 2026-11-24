@@ -12,6 +12,10 @@
   <body>
     <header>
       <div class="brand"><span class="dot"></span>MultiChat</div>
+      <select id="provider" title="De onde vêm as respostas" aria-label="Provedor">
+        <option value="openrouter">OpenRouter</option>
+        <option value="local">IA local</option>
+      </select>
       <select id="model" title="Modelo atual" aria-label="Modelo"></select>
       <label class="toggle" title="Mostrar apenas modelos gratuitos">
         <input type="checkbox" id="free-only" checked />
@@ -75,6 +79,18 @@
             <a id="keys-link" href="#">openrouter.ai/keys</a>. Modelos gratuitos aparecem no seletor do topo.
           </div>
           <div class="error" id="key-error" hidden></div>
+          <div class="local-box">
+            <h3>Ou use uma IA local, sem limite</h3>
+            <p>
+              Qualquer servidor compatível com OpenAI nesta máquina: llama.cpp, Ollama ou LM Studio. Sem chave,
+              sem cota e sem internet.
+            </p>
+            <input id="local-url" type="text" placeholder="http://127.0.0.1:8080/v1" autocomplete="off" spellcheck="false" />
+            <div class="local-row">
+              <span class="local-status" id="local-status"></span>
+              <button class="btn ghost" type="button" id="local-test">Testar e usar</button>
+            </div>
+          </div>
         </div>
         <div class="modal-foot">
           <button class="btn ghost" value="cancel" id="key-cancel">Cancelar</button>
