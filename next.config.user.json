@@ -1,6 +1,0 @@
-{
-  "serverExternalPackages": ["pdf-parse"],
-  "outputFileTracingIncludes": {
-    "/api/files/process": ["./node_modules/pdf-parse/**/*"]
-  }
-}

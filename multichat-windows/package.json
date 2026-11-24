@@ -1,0 +1,51 @@
+{
+  "name": "multichat-windows",
+  "productName": "MultiChat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplicativo de desktop (Windows) para o Chat Multi-IA: conversa com os modelos gratuitos do OpenRouter sem precisar de servidor.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable",
+    "pack": "electron-builder --dir"
+  },
+  "build": {
+    "appId": "app.multichat.desktop",
+    "productName": "MultiChat",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon-256.png",
+      "sign": false,
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "MultiChat-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "MultiChat-Setup-${version}.exe"
+    }
+  },
+  "devDependencies": {
+    "canvas": "^3.2.3",
+    "electron": "^33.4.11",
+    "electron-builder": "^25.0.0"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}
