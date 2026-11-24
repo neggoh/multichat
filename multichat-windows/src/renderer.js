@@ -5,10 +5,10 @@
 const api = window.multichat
 const STORE_KEY = 'multichat:state'
 const FALLBACK_MODELS = [
-  { id: 'deepseek/deepseek-chat-v3-0324:free', name: 'DeepSeek V3 0324', context: 163840, vision: false },
-  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct', context: 131072, vision: false },
-  { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash (exp)', context: 1048576, vision: true },
-  { id: 'qwen/qwen3-235b-a22b:free', name: 'Qwen3 235B A22B', context: 131072, vision: false },
+  { id: 'deepseek/deepseek-chat-v3-0324:free', name: 'DeepSeek V3 0324', context: 163840, vision: false, free: true },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B Instruct', context: 131072, vision: false, free: true },
+  { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash (exp)', context: 1048576, vision: true, free: true },
+  { id: 'qwen/qwen3-235b-a22b:free', name: 'Qwen3 235B A22B', context: 131072, vision: false, free: true },
 ]
 const SYSTEM_PROMPT = [
   'Você é um assistente técnico prestativo e direto. Responda sempre em português do Brasil.',
@@ -20,6 +20,7 @@ const $ = (id) => document.getElementById(id)
 const els = {
   model: $('model'),
   modelInfo: $('model-info'),
+  freeOnly: $('free-only'),
   keyChip: $('key-chip'),
   keyBtn: $('key-btn'),
   newBtn: $('new-btn'),
@@ -31,6 +32,9 @@ const els = {
   send: $('send-btn'),
   stop: $('stop-btn'),
   status: $('status'),
+  attach: $('attach-btn'),
+  attachments: $('attachments'),
+  dropOverlay: $('drop-overlay'),
   dialog: $('key-dialog'),
   keyInput: $('key-input'),
   keySave: $('key-save'),
@@ -46,6 +50,9 @@ const state = {
   streaming: false,
   requestId: 0,
   hasKey: false,
+  freeOnly: true,
+  attachments: [],
+  attaching: false,
 }
 
 /* ------------------------------- persistência ------------------------------- */
@@ -56,19 +63,34 @@ function loadState() {
     state.conversations = Array.isArray(raw.conversations) ? raw.conversations : []
     state.selectedModel = typeof raw.selectedModel === 'string' ? raw.selectedModel : state.selectedModel
     state.currentId = typeof raw.currentId === 'string' ? raw.currentId : null
+    state.freeOnly = typeof raw.freeOnly === 'boolean' ? raw.freeOnly : true
   } catch (error) {
     console.error('[renderer] Estado corrompido, começando do zero:', error)
   }
 }
 
+/** O data URL da imagem só existe em memória: no disco ele estouraria o localStorage. */
+function stripAttachment(attachment) {
+  const { imageDataUrl, ...rest } = attachment ?? {}
+  return rest
+}
+
 function saveState() {
   try {
+    const conversations = state.conversations.map((conversation) => ({
+      ...conversation,
+      messages: (conversation.messages ?? []).map((message) => ({
+        ...message,
+        attachments: (message.attachments ?? []).map(stripAttachment),
+      })),
+    }))
     localStorage.setItem(
       STORE_KEY,
       JSON.stringify({
-        conversations: state.conversations,
+        conversations,
         selectedModel: state.selectedModel,
         currentId: state.currentId,
+        freeOnly: state.freeOnly,
       })
     )
   } catch (error) {
@@ -124,17 +146,82 @@ function renderMarkdown(source) {
 
 /* --------------------------------- interface -------------------------------- */
 
+const KIND_LABELS = {
+  zip: 'ZIP', apk: 'APK', pdf: 'PDF', image: 'Imagem', code: 'Código',
+  json: 'JSON', xml: 'XML', csv: 'CSV', text: 'Texto', other: 'Arquivo',
+}
+
+function formatBytes(bytes) {
+  const value = typeof bytes === 'number' && Number.isFinite(bytes) ? bytes : 0
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function priceLabel(model) {
+  if (!model || model.free) return ''
+  const perMillion = (value) => `$${(Number(value ?? 0) * 1_000_000).toFixed(2)}`
+  return ` · ${perMillion(model.promptPrice)}/M tokens de entrada`
+}
+
 function modelLabel(model) {
   if (!model) return ''
   const ctx = model.context ? ` · ${model.context >= 1000000 ? Math.round(model.context / 100000) / 10 + 'M' : Math.round(model.context / 1000) + 'k'} tokens` : ''
-  return `${model.name}${model.vision ? ' · visão' : ''}${ctx}`
+  return `${model.name}${model.free ? ' · grátis' : priceLabel(model)}${model.vision ? ' · visão' : ''}${ctx}`
+}
+
+function visibleModels() {
+  return state.freeOnly ? state.models.filter((model) => model.free) : state.models
 }
 
 function renderModels() {
-  els.model.innerHTML = state.models.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join('')
-  if (!state.models.some((m) => m.id === state.selectedModel)) state.selectedModel = state.models[0]?.id ?? ''
+  const list = visibleModels()
+  els.model.innerHTML = list
+    .map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.free ? m.name : `${m.name} — pago`)}</option>`)
+    .join('')
+  if (!list.some((m) => m.id === state.selectedModel)) state.selectedModel = list[0]?.id ?? state.models[0]?.id ?? ''
   els.model.value = state.selectedModel
   els.modelInfo.textContent = modelLabel(state.models.find((m) => m.id === state.selectedModel))
+  els.freeOnly.checked = state.freeOnly
+}
+
+function attachmentChip(attachment, onRemove) {
+  const chip = document.createElement('span')
+  chip.className = 'attach-chip'
+  chip.title = attachment.summary ?? ''
+  const kind = document.createElement('span')
+  kind.className = 'kind'
+  kind.textContent = KIND_LABELS[attachment.kind] ?? 'Arquivo'
+  const name = document.createElement('span')
+  name.className = 'name'
+  name.textContent = attachment.name
+  const size = document.createElement('span')
+  size.className = 'size'
+  size.textContent = formatBytes(attachment.size)
+  chip.append(kind, name, size)
+  if (onRemove) {
+    const remove = document.createElement('button')
+    remove.className = 'remove'
+    remove.type = 'button'
+    remove.textContent = '✕'
+    remove.title = 'Remover anexo'
+    remove.addEventListener('click', onRemove)
+    chip.append(remove)
+  }
+  return chip
+}
+
+function renderAttachments() {
+  els.attachments.hidden = state.attachments.length === 0
+  els.attachments.innerHTML = ''
+  state.attachments.forEach((attachment, index) => {
+    els.attachments.append(
+      attachmentChip(attachment, () => {
+        state.attachments.splice(index, 1)
+        renderAttachments()
+      })
+    )
+  })
 }
 
 function renderConversations() {
@@ -202,6 +289,12 @@ function renderMessages() {
     if (message.role === 'user') content.textContent = message.content
     else content.innerHTML = renderMarkdown(message.content)
     body.append(meta, content)
+    if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+      const strip = document.createElement('div')
+      strip.className = 'attachments'
+      for (const attachment of message.attachments) strip.append(attachmentChip(attachment))
+      body.append(strip)
+    }
     row.append(avatar, body)
     els.messages.append(row)
   }
@@ -263,28 +356,91 @@ function ensureConversation() {
   return conversation
 }
 
+function treeToText(nodes, depth = 0) {
+  const list = Array.isArray(nodes) ? nodes : []
+  let output = ''
+  for (const node of list) {
+    if (!node?.name) continue
+    output += `${'  '.repeat(depth)}${node.name}${node.type === 'dir' ? '/' : ''}\n`
+    if (node.children && node.children.length > 0) output += treeToText(node.children, depth + 1)
+  }
+  return output
+}
+
+function attachmentBlock(attachment) {
+  const attributes = [
+    `nome="${String(attachment.name ?? 'arquivo').replace(/"/g, '&quot;')}"`,
+    `tipo="${attachment.kind ?? 'other'}"`,
+    `tamanho="${Math.max(0, Math.round(Number(attachment.size ?? 0)))}"`,
+  ]
+  if (typeof attachment.fileCount === 'number') attributes.push(`arquivos="${attachment.fileCount}"`)
+  if (attachment.technology) attributes.push(`tech="${String(attachment.technology).replace(/"/g, '&quot;')}"`)
+
+  const parts = [`<anexo ${attributes.join(' ')}>`, `RESUMO: ${String(attachment.summary ?? '').replace(/\s+/g, ' ').trim()}`]
+  if (Array.isArray(attachment.tree) && attachment.tree.length > 0) {
+    parts.push('ESTRUTURA DE PASTAS:')
+    parts.push(treeToText(attachment.tree).trimEnd())
+  }
+  const context = String(attachment.context ?? '').trim()
+  if (context) {
+    parts.push('CONTEUDO DOS ARQUIVOS:')
+    parts.push(context)
+  }
+  parts.push('</anexo>')
+  return parts.join('\n')
+}
+
+/** Imagens só vão como conteúdo multimodal na última mensagem do usuário. */
+function messageContent(message, includeImages) {
+  const attachments = Array.isArray(message.attachments) ? message.attachments : []
+  const blocks = attachments.filter((attachment) => attachment.kind !== 'image').map(attachmentBlock)
+  const text = [message.content, ...blocks].filter((part) => part && part.trim().length > 0).join('\n\n')
+  const images = includeImages ? attachments.filter((attachment) => attachment.imageDataUrl) : []
+  if (images.length === 0) return text
+  return [
+    { type: 'text', text: text || 'Analise a imagem anexada.' },
+    ...images.map((image) => ({ type: 'image_url', image_url: { url: image.imageDataUrl } })),
+  ]
+}
+
 function buildRequestMessages(conversation) {
   const history = conversation.messages
-    .filter((message) => message.content.trim().length > 0)
+    .filter((message) => message.content.trim().length > 0 || (message.attachments ?? []).length > 0)
     .slice(-30)
-    .map((message) => ({ role: message.role, content: message.content }))
-  return [{ role: 'system', content: SYSTEM_PROMPT }, ...history]
+  const lastUserIndex = history.map((message) => message.role).lastIndexOf('user')
+  const mapped = history.map((message, index) => ({
+    role: message.role,
+    content: messageContent(message, index === lastUserIndex),
+  }))
+  return [{ role: 'system', content: SYSTEM_PROMPT }, ...mapped]
 }
 
 async function send() {
   const text = els.input.value.trim()
-  if (!text || state.streaming) return
+  const attachments = state.attachments.slice()
+  if ((!text && attachments.length === 0) || state.streaming) return
   if (!state.hasKey) {
     openKeyDialog()
     return
   }
 
+  const model = state.models.find((item) => item.id === state.selectedModel)
+  if (attachments.some((attachment) => attachment.kind === 'image') && !model?.vision) {
+    setStatus('o modelo atual não aceita imagem — escolha um modelo com visão')
+    return
+  }
+
   const conversation = ensureConversation()
   conversation.model = state.selectedModel
-  if (conversation.title === 'Nova conversa') conversation.title = text.slice(0, 60) + (text.length > 60 ? '…' : '')
-  conversation.messages.push({ role: 'user', content: text })
+  if (conversation.title === 'Nova conversa') {
+    const title = text || attachments.map((attachment) => attachment.name).join(', ')
+    conversation.title = title.slice(0, 60) + (title.length > 60 ? '...' : '')
+  }
+  conversation.messages.push({ role: 'user', content: text, attachments })
   conversation.updatedAt = Date.now()
   els.input.value = ''
+  state.attachments = []
+  renderAttachments()
   autoGrow()
   saveState()
   renderConversations()
@@ -366,13 +522,57 @@ function autoGrow() {
   els.input.style.height = `${Math.min(els.input.scrollHeight, 200)}px`
 }
 
+const MAX_ATTACHMENTS = 6
+
+function applyProcessed(result) {
+  const files = Array.isArray(result?.files) ? result.files : []
+  const room = Math.max(0, MAX_ATTACHMENTS - state.attachments.length)
+  state.attachments.push(...files.slice(0, room))
+  if (files.length > room) setStatus(`limite de ${MAX_ATTACHMENTS} anexos por mensagem`)
+  else if (result?.errors?.length) setStatus(result.errors[0])
+  else if (state.attachments.length > 0) setStatus(`${state.attachments.length} anexo(s) pronto(s)`)
+  renderAttachments()
+}
+
+async function addFiles(paths) {
+  const list = (Array.isArray(paths) ? paths : []).filter(Boolean)
+  if (list.length === 0 || state.attaching) return
+  state.attaching = true
+  els.attach.disabled = true
+  setStatus('lendo anexos...')
+  try {
+    applyProcessed(await api.processFiles(list))
+  } catch (error) {
+    setStatus(error?.message ?? 'não foi possível ler os anexos')
+  } finally {
+    state.attaching = false
+    els.attach.disabled = false
+  }
+}
+
+async function attachFromDialog() {
+  if (state.attaching) return
+  state.attaching = true
+  els.attach.disabled = true
+  try {
+    const result = await api.pickFiles()
+    if (result?.ok === false) setStatus(result.error ?? 'não foi possível abrir o seletor')
+    else applyProcessed(result)
+  } catch (error) {
+    setStatus(error?.message ?? 'não foi possível abrir o seletor')
+  } finally {
+    state.attaching = false
+    els.attach.disabled = false
+  }
+}
+
 async function loadModels() {
-  setStatus('carregando modelos…')
+  setStatus('carregando modelos...')
   const result = await api.models()
   if (result.ok && result.models.length > 0) {
     state.models = result.models
     renderModels()
-    setStatus(`${result.models.length} modelos gratuitos`)
+    setStatus(`${result.models.length} modelos · ${result.freeCount ?? 0} gratuitos`)
   } else {
     state.models = FALLBACK_MODELS
     renderModels()
@@ -386,6 +586,12 @@ function bind() {
   els.stop.addEventListener('click', stop)
   els.newBtn.addEventListener('click', newConversation)
   els.keyBtn.addEventListener('click', openKeyDialog)
+  els.attach.addEventListener('click', attachFromDialog)
+  els.freeOnly.addEventListener('change', () => {
+    state.freeOnly = els.freeOnly.checked
+    renderModels()
+    saveState()
+  })
   els.clearBtn.addEventListener('click', () => {
     if (!state.conversations.length) return
     if (!confirm('Apagar todas as conversas deste computador?')) return
@@ -435,6 +641,36 @@ function bind() {
       saveKey()
     }
   })
+
+  let dragDepth = 0
+  const hasFiles = (event) => Array.from(event.dataTransfer?.types ?? []).includes('Files')
+
+  document.addEventListener('dragenter', (event) => {
+    if (!hasFiles(event)) return
+    dragDepth += 1
+    els.dropOverlay.hidden = false
+  })
+  document.addEventListener('dragover', (event) => {
+    if (hasFiles(event)) event.preventDefault()
+  })
+  document.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1)
+    if (dragDepth === 0) els.dropOverlay.hidden = true
+  })
+  document.addEventListener('drop', (event) => {
+    if (!event.dataTransfer?.files?.length) return
+    event.preventDefault()
+    dragDepth = 0
+    els.dropOverlay.hidden = true
+    const paths = Array.from(event.dataTransfer.files)
+      .map((file) => api.pathForFile(file))
+      .filter(Boolean)
+    if (paths.length === 0) {
+      setStatus('não foi possível ler os arquivos arrastados')
+      return
+    }
+    addFiles(paths)
+  })
 }
 
 async function boot() {
@@ -443,6 +679,7 @@ async function boot() {
   renderModels()
   renderConversations()
   renderMessages()
+  renderAttachments()
 
   api.onDelta(({ requestId, text }) => {
     if (requestId !== state.requestId) return

@@ -13,6 +13,10 @@
     <header>
       <div class="brand"><span class="dot"></span>MultiChat</div>
       <select id="model" title="Modelo atual" aria-label="Modelo"></select>
+      <label class="toggle" title="Mostrar apenas modelos gratuitos">
+        <input type="checkbox" id="free-only" checked />
+        só grátis
+      </label>
       <span class="chip" id="model-info"></span>
       <span class="spacer"></span>
       <span class="chip" id="key-chip">chave não configurada</span>
@@ -38,19 +42,25 @@
 
         <footer class="composer">
           <div class="composer-inner">
+            <div class="attachments" id="attachments" hidden></div>
             <div class="composer-box">
-              <textarea id="input" rows="1" placeholder="Pergunte qualquer coisa…" aria-label="Mensagem"></textarea>
+              <button class="icon-btn attach" id="attach-btn" title="Anexar arquivos (ZIP, APK, PDF, imagem, código)" aria-label="Anexar arquivos">📎</button>
+              <textarea id="input" rows="1" placeholder="Pergunte qualquer coisa..." aria-label="Mensagem"></textarea>
               <button class="btn primary" id="send-btn">Enviar</button>
               <button class="btn ghost" id="stop-btn" hidden>Parar</button>
             </div>
             <div class="composer-row">
-              <span><kbd>Enter</kbd> envia · <kbd>Shift</kbd>+<kbd>Enter</kbd> nova linha</span>
+              <span><kbd>Enter</kbd> envia · <kbd>Shift</kbd>+<kbd>Enter</kbd> nova linha · arraste arquivos aqui</span>
               <span id="status"></span>
             </div>
           </div>
         </footer>
       </section>
     </main>
+
+    <div class="drop-overlay" id="drop-overlay" hidden>
+      <div>Solte os arquivos para anexar</div>
+    </div>
 
     <dialog id="key-dialog">
       <form method="dialog">

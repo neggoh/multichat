@@ -1,6 +1,6 @@
 'use strict'
 
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('multichat', {
   models: () => ipcRenderer.invoke('models:list'),
@@ -14,4 +14,13 @@ contextBridge.exposeInMainWorld('multichat', {
   keyStatus: () => ipcRenderer.invoke('key:status'),
   saveKey: (key) => ipcRenderer.invoke('key:save', key),
   openExternal: (url) => ipcRenderer.invoke('app:openExternal', url),
+  pickFiles: () => ipcRenderer.invoke('files:pick'),
+  processFiles: (paths) => ipcRenderer.invoke('files:process', paths),
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
 })

@@ -67,6 +67,15 @@ select#model:focus { border-color: var(--primary); }
 .chip.ok { color: var(--accent); border-color: #2dd4bf55; background: #2dd4bf12; }
 .chip.warn { color: #fbbf24; border-color: #fbbf2455; background: #fbbf2412; }
 
+.toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--muted); cursor: pointer;
+  padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line);
+  user-select: none;
+}
+.toggle:hover { border-color: var(--primary); color: var(--text); }
+.toggle input { accent-color: var(--primary); margin: 0; cursor: pointer; }
+
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; border-radius: 9px;
@@ -174,6 +183,44 @@ footer.composer { padding: 10px 0 16px; border-top: 1px solid var(--line); backg
 }
 .composer-row { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--muted); }
 kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+
+/* --------------------------------- anexos ----------------------------------- */
+.icon-btn.attach { flex: none; width: 30px; height: 30px; font-size: 14px; }
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  max-width: 100%; padding: 5px 6px 5px 10px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2);
+  font-size: 12px;
+}
+.attach-chip .kind {
+  font-size: 10px; font-weight: 700; letter-spacing: .3px;
+  padding: 2px 6px; border-radius: 6px;
+  background: var(--primary-soft); color: var(--primary); border: 1px solid #8b5cf655;
+}
+.attach-chip .name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-chip .size { color: var(--muted); font-size: 11px; }
+.attach-chip .remove {
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: 12px; padding: 0 2px; line-height: 1;
+}
+.attach-chip .remove:hover { color: var(--danger); }
+.attach-chip.pending { opacity: .6; }
+
+.msg .attachments { margin: 8px 0 0; }
+.msg .attach-chip { background: #ffffff08; }
+
+.drop-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  display: grid; place-items: center;
+  background: #05040acc; backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+.drop-overlay div {
+  padding: 26px 34px; border-radius: 16px;
+  border: 2px dashed var(--primary); color: var(--text);
+  font-weight: 600; background: var(--panel);
+}
 
 /* ---------------------------------- modal ----------------------------------- */
 dialog {

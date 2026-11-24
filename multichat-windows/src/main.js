@@ -9,9 +9,14 @@
  * - A janela usa uma Content-Security-Policy restritiva e não tem integração com Node.
  */
 
-const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, nativeTheme } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, nativeTheme, dialog } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
+const {
+  processFile,
+  ACCEPTED_EXTENSIONS,
+  MAX_FILES_PER_MESSAGE,
+} = require('./files')
 
 const OPENROUTER = 'https://openrouter.ai/api/v1'
 const DEFAULT_MODEL = 'deepseek/deepseek-chat-v3-0324:free'
@@ -116,31 +121,82 @@ function friendlyError(status, detail) {
 
 ipcMain.handle('models:list', async () => {
   try {
-    const response = await openRouterFetch('/models')
+    // O catálogo do OpenRouter é público: a lista aparece antes de configurar a chave.
+    const response = await fetch(`${OPENROUTER}/models`, {
+      headers: { Accept: 'application/json', 'HTTP-Referer': 'https://github.com/neggoh/multichat', 'X-Title': 'MultiChat Windows' },
+    })
+    if (!response.ok) throw new Error(`O OpenRouter respondeu com status ${response.status}.`)
     const payload = await response.json()
     const list = Array.isArray(payload?.data) ? payload.data : []
     const models = list
       .filter((model) => {
-        const prompt = Number(model?.pricing?.prompt ?? '1')
-        const completion = Number(model?.pricing?.completion ?? '1')
         const output = Array.isArray(model?.architecture?.output_modalities) ? model.architecture.output_modalities : []
-        if (prompt !== 0 || completion !== 0) return false
         if (output.length > 0 && (!output.includes('text') || output.includes('image') || output.includes('audio'))) return false
         const id = String(model?.id ?? '').toLowerCase()
         return !id.includes('lyria') && !id.includes('whisper') && !id.includes('tts')
       })
-      .map((model) => ({
-        id: String(model.id),
-        name: String(model.name ?? model.id),
-        context: typeof model.context_length === 'number' ? model.context_length : null,
-        vision: Array.isArray(model?.architecture?.input_modalities) && model.architecture.input_modalities.includes('image'),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-    return { ok: true, models }
+      .map((model) => {
+        const promptPrice = Number(model?.pricing?.prompt ?? '1')
+        const completionPrice = Number(model?.pricing?.completion ?? '1')
+        const free = promptPrice === 0 && completionPrice === 0
+        return {
+          id: String(model.id),
+          name: String(model.name ?? model.id),
+          context: typeof model.context_length === 'number' ? model.context_length : null,
+          vision: Array.isArray(model?.architecture?.input_modalities) && model.architecture.input_modalities.includes('image'),
+          free,
+          promptPrice: free ? 0 : promptPrice,
+          completionPrice: free ? 0 : completionPrice,
+        }
+      })
+      .sort((a, b) => (a.free === b.free ? a.name.localeCompare(b.name) : a.free ? -1 : 1))
+
+    if (models.length === 0) throw new Error('O OpenRouter não retornou nenhum modelo de texto.')
+    return { ok: true, models, freeCount: models.filter((model) => model.free).length }
   } catch (error) {
     return { ok: false, error: error.message }
   }
 })
+
+/* ---------------------------------- anexos ---------------------------------- */
+
+async function processPaths(paths) {
+  const files = []
+  const errors = []
+  for (const filePath of paths.slice(0, MAX_FILES_PER_MESSAGE)) {
+    try {
+      files.push(await processFile(filePath))
+    } catch (error) {
+      errors.push(error.message)
+    }
+  }
+  if (paths.length > MAX_FILES_PER_MESSAGE) {
+    errors.push(`Só é possível anexar ${MAX_FILES_PER_MESSAGE} arquivos por mensagem.`)
+  }
+  return { ok: true, files, errors }
+}
+
+ipcMain.handle('files:pick', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Anexar arquivos',
+    buttonLabel: 'Anexar',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'Arquivos suportados', extensions: ACCEPTED_EXTENSIONS },
+      { name: 'Todos os arquivos', extensions: ['*'] },
+    ],
+  })
+  if (result.canceled || result.filePaths.length === 0) return { ok: true, files: [], errors: [] }
+  return processPaths(result.filePaths)
+})
+
+ipcMain.handle('files:process', async (_event, paths) => {
+  const list = Array.isArray(paths) ? paths.filter((item) => typeof item === 'string' && item.length > 0) : []
+  if (list.length === 0) return { ok: false, files: [], errors: ['Nenhum arquivo recebido.'] }
+  return processPaths(list)
+})
+
 
 ipcMain.handle('chat:stream', async (event, request) => {
   const { requestId, model, messages } = request ?? {}

@@ -10,7 +10,7 @@
     "dist": "electron-builder --win portable",
     "dist:installer": "electron-builder --win nsis",
     "pack": "electron-builder --dir",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js"
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js && node --check src/files.js"
   },
   "build": {
     "appId": "app.multichat.desktop",
@@ -49,6 +49,10 @@
       "allowToChangeInstallationDirectory": true,
       "artifactName": "MultiChat-Setup-${version}.exe"
     }
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "pdf-parse": "1.1.1"
   },
   "devDependencies": {
     "electron": "^33.4.11",
