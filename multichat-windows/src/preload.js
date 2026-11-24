@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('multichat', {
   models: (options) => ipcRenderer.invoke('models:list', options),
   settings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (next) => ipcRenderer.invoke('settings:save', next),
+  startLocal: (model) => ipcRenderer.invoke('local:start', model),
+  stopLocal: () => ipcRenderer.invoke('local:stop'),
   chat: (request) => ipcRenderer.invoke('chat:stream', request),
   abort: (requestId) => ipcRenderer.invoke('chat:abort', requestId),
   onDelta: (callback) => {

@@ -14,6 +14,10 @@ O seletor lista **todos** os modelos de texto do OpenRouter (hoje ~450), com os 
 
 O seletor **OpenRouter / IA local** no topo troca a origem das respostas. No modo local o app fala com qualquer servidor compatível com OpenAI rodando na sua máquina — llama.cpp, Ollama ou LM Studio — sem chave, sem cota e sem internet.
 
+O app lista **todos os `.gguf`** da pasta de modelos e, ao trocar de modelo no seletor, encerra o servidor anterior e sobe o novo com o contexto configurado (8 mil tokens por padrão). Servidores órfãos de execuções anteriores são encerrados antes, e o processo filho morre junto com o app.
+
+O histórico e os anexos são cortados para caber no contexto do modelo, tanto na interface quanto no processo principal — um APK grande é resumido em vez de estourar o limite.
+
 Para montar tudo com um comando (baixa o llama.cpp e um modelo GGUF pequeno):
 
 ```powershell

@@ -12,6 +12,8 @@
 const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, nativeTheme, dialog } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
+const os = require('node:os')
+const { spawn } = require('node:child_process')
 const {
   processFile,
   ACCEPTED_EXTENSIONS,
@@ -21,6 +23,7 @@ const {
 const OPENROUTER = 'https://openrouter.ai/api/v1'
 const DEFAULT_MODEL = 'deepseek/deepseek-chat-v3-0324:free'
 const DEFAULT_LOCAL_BASE = 'http://127.0.0.1:8080/v1'
+const DEFAULT_LOCAL_CONTEXT = 8192
 
 const dataDir = () => app.getPath('userData')
 const storePath = () => path.join(dataDir(), 'multichat.json')
@@ -141,7 +144,214 @@ function providerSettings() {
   const store = readStore()
   const provider = store.provider === 'local' ? 'local' : 'openrouter'
   const base = String(store.localBaseUrl ?? DEFAULT_LOCAL_BASE).trim().replace(/\/+$/, '') || DEFAULT_LOCAL_BASE
-  return { provider, base, model: String(store.localModel ?? '') }
+  return {
+    provider,
+    base,
+    model: String(store.localModel ?? ''),
+    dir: String(store.localDir ?? defaultLocalDir()),
+    context: Number(store.localContext ?? DEFAULT_LOCAL_CONTEXT) || DEFAULT_LOCAL_CONTEXT,
+  }
+}
+
+function defaultLocalDir() {
+  const candidates = ['D:/chat/local-ai', path.join(os.homedir(), 'MultiChatLocalAI'), path.join(app.getPath('userData'), 'models')]
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      // ignora
+    }
+  }
+  return candidates[1]
+}
+
+/** Lista os .gguf da pasta configurada — o servidor só carrega um por vez. */
+function scanLocalModels(dir) {
+  const folder = dir || defaultLocalDir()
+  let entries = []
+  try {
+    entries = fs.readdirSync(folder, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.gguf'))
+    .map((entry) => {
+      let size = 0
+      try {
+        size = fs.statSync(path.join(folder, entry.name)).size
+      } catch {
+        size = 0
+      }
+      return { id: entry.name, name: entry.name.replace(/\.gguf$/i, ''), path: path.join(folder, entry.name), size }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function findServerBinary(dir) {
+  const candidates = [
+    path.join(dir, 'llama', 'llama-server.exe'),
+    path.join(dir, 'llama-server.exe'),
+    path.join(dir, 'llama.cpp', 'llama-server.exe'),
+  ]
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? null
+}
+
+const localServer = { proc: null, model: '', port: 0, starting: null }
+
+function stopLocalServer() {
+  if (localServer.proc) {
+    try {
+      localServer.proc.kill()
+    } catch {
+      // já encerrado
+    }
+  }
+  localServer.proc = null
+  localServer.model = ''
+  localServer.starting = null
+}
+
+/** Mata um llama-server órfão que ficou segurando a porta depois de fechar o app. */
+function killPortOwner(port) {
+  try {
+    const { execFileSync } = require('node:child_process')
+    const output = execFileSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true })
+    const pids = new Set()
+    for (const line of output.split(/\r?\n/)) {
+      if (!line.includes(`:${port}`) || !line.includes('LISTENING')) continue
+      const parts = line.trim().split(/\s+/)
+      const pid = Number(parts[parts.length - 1])
+      if (Number.isFinite(pid) && pid > 0) pids.add(pid)
+    }
+    for (const pid of pids) {
+      let image = ''
+      try {
+        image = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true })
+      } catch {
+        image = ''
+      }
+      if (!/llama-server/i.test(image)) continue
+      execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true })
+    }
+  } catch {
+    // sem permissão ou porta livre
+  }
+}
+
+/** Confere qual modelo o servidor em execução está servindo. */
+async function servedModel(base) {
+  try {
+    const response = await fetch(`${base}/models`, { signal: AbortSignal.timeout(2000) })
+    if (!response.ok) return ''
+    const payload = await response.json()
+    const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : []
+    const first = list[0]
+    return String(first?.id ?? first?.model ?? first?.name ?? '')
+  } catch {
+    return ''
+  }
+}
+
+async function waitForServer(base, timeoutMs) {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    try {
+      const response = await fetch(`${base}/models`, { signal: AbortSignal.timeout(1500) })
+      if (response.ok) return true
+    } catch {
+      // ainda subindo
+    }
+    await new Promise((resolve) => setTimeout(resolve, 700))
+  }
+  return false
+}
+
+/** Rede de segurança: corta o payload para caber no contexto do modelo local. */
+function trimForContext(messages, contextTokens) {
+  const list = Array.isArray(messages) ? messages : []
+  if (list.length === 0) return list
+  const budget = Math.max(2000, Math.floor(contextTokens * 3.2) - 4000)
+  const size = (message) => (typeof message?.content === 'string' ? message.content.length : 0)
+  const system = list[0]?.role === 'system' ? list[0] : null
+  const rest = system ? list.slice(1) : list
+  let left = budget - (system ? size(system) : 0)
+  const kept = []
+
+  for (let index = rest.length - 1; index >= 0; index -= 1) {
+    const message = rest[index]
+    const length = size(message)
+    if (length <= left) {
+      kept.unshift(message)
+      left -= length
+      continue
+    }
+    if (index === rest.length - 1 && typeof message.content === 'string') {
+      const cut = Math.max(500, left - 200)
+      kept.unshift({
+        ...message,
+        content: `${message.content.slice(0, cut)}\n\n[... conteúdo cortado para caber no contexto do modelo ...]`,
+      })
+    }
+    break
+  }
+
+  return system ? [system, ...kept] : kept
+}
+
+/** Sobe o llama-server para o modelo pedido, se ainda não estiver no ar com ele. */
+async function ensureLocalServer(modelId) {
+  const settings = providerSettings()
+  const wanted = String(modelId ?? settings.model ?? '').trim()
+  if (!wanted) return { ok: true }
+
+  if (localServer.proc && localServer.model === wanted && (await waitForServer(settings.base, 2000))) {
+    return { ok: true, model: wanted }
+  }
+
+  const models = scanLocalModels(settings.dir)
+  const target = models.find((model) => model.id === wanted || model.name === wanted)
+  if (!target) {
+    return { ok: false, error: `O modelo ${wanted} não está em ${settings.dir}.` }
+  }
+
+  const binary = findServerBinary(settings.dir)
+  if (!binary) {
+    return { ok: false, error: `llama-server.exe não encontrado em ${settings.dir}. Rode scripts/local-ai.ps1 uma vez.` }
+  }
+
+  if (localServer.starting) await localServer.starting.catch(() => undefined)
+  stopLocalServer()
+
+  const port = Number(new URL(settings.base).port || 8080)
+
+  // Sempre limpa a porta: um servidor órfão de execução anterior serviria outro modelo.
+  killPortOwner(port)
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+
+  const proc = spawn(
+    binary,
+    ['-m', target.path, '--host', '127.0.0.1', '--port', String(port), '-c', String(settings.context), '-t', String(Math.max(4, os.cpus().length)), '--no-warmup'],
+    { cwd: settings.dir, stdio: 'ignore', windowsHide: true }
+  )
+  localServer.proc = proc
+  localServer.model = target.id
+  localServer.port = port
+
+  localServer.starting = waitForServer(settings.base, 180000)
+  const ready = await localServer.starting
+  localServer.starting = null
+  if (!ready) {
+    stopLocalServer()
+    return { ok: false, error: `O modelo ${target.name} não terminou de carregar.` }
+  }
+
+  const served = await servedModel(settings.base)
+  if (served && !served.toLowerCase().includes(target.id.toLowerCase())) {
+    stopLocalServer()
+    return { ok: false, error: `A porta ${port} está ocupada por outro modelo (${served}). Feche o outro servidor e tente de novo.` }
+  }
+  return { ok: true, model: target.id }
 }
 
 /** Fala com a IA local (llama.cpp, Ollama, LM Studio) ou com o OpenRouter. */
@@ -180,36 +390,29 @@ async function providerFetch(pathname, init = {}) {
 
 async function listLocalModels() {
   const settings = providerSettings()
-  try {
-    const response = await fetch(`${settings.base}/models`, { headers: { Accept: 'application/json' } })
-    if (!response.ok) throw new Error(`status ${response.status}`)
-    const payload = await response.json()
-    const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : []
-    const models = list
-      .map((model) => {
-        const id = String(model?.id ?? model?.name ?? model?.model ?? '')
-        return {
-          id,
-          name: String(model?.name ?? id),
-          context: null,
-          vision: false,
-          free: true,
-          promptPrice: 0,
-          completionPrice: 0,
-        }
-      })
-      .filter((model) => model.id.length > 0)
-      .sort((a, b) => a.name.localeCompare(b.name))
-    if (models.length === 0) throw new Error('o servidor não listou nenhum modelo')
-    return { ok: true, models, freeCount: models.length, provider: 'local' }
-  } catch (error) {
+  const scanned = scanLocalModels(settings.dir)
+  const models = scanned.map((model) => ({
+    id: model.id,
+    name: model.name,
+    context: settings.context,
+    vision: false,
+    free: true,
+    promptPrice: 0,
+    completionPrice: 0,
+    size: model.size,
+  }))
+
+  if (models.length === 0) {
     return {
       ok: false,
-      error: `IA local indisponível em ${settings.base}: ${error.message}`,
       provider: 'local',
       models: [],
+      error: `Nenhum .gguf em ${settings.dir}. Rode scripts/local-ai.ps1 ou aponte a pasta dos modelos.`,
     }
   }
+
+  const running = localServer.proc && (await waitForServer(settings.base, 1500)) ? localServer.model : null
+  return { ok: true, models, freeCount: models.length, provider: 'local', running, dir: settings.dir }
 }
 
 ipcMain.handle('models:list', async (_event, options) => {
@@ -262,8 +465,20 @@ ipcMain.handle('settings:save', (_event, next) => {
   if (next?.provider === 'local' || next?.provider === 'openrouter') store.provider = next.provider
   if (typeof next?.localBaseUrl === 'string') store.localBaseUrl = next.localBaseUrl.trim()
   if (typeof next?.localModel === 'string') store.localModel = next.localModel
+  if (typeof next?.localDir === 'string') store.localDir = next.localDir.trim()
+  if (Number.isFinite(Number(next?.localContext)) && Number(next.localContext) > 0) store.localContext = Number(next.localContext)
   writeStore(store)
   return { ok: true, ...providerSettings() }
+})
+
+ipcMain.handle('local:start', async (_event, model) => {
+  const result = await ensureLocalServer(model)
+  return { ...result, ...providerSettings() }
+})
+
+ipcMain.handle('local:stop', () => {
+  stopLocalServer()
+  return { ok: true }
 })
 
 /* ---------------------------------- anexos ---------------------------------- */
@@ -312,7 +527,17 @@ ipcMain.handle('chat:stream', async (event, request) => {
   activeRequests.set(requestId, controller)
   let text = ''
   try {
-    const payload = { model: model || DEFAULT_MODEL, stream: true, messages }
+    if (providerSettings().provider === 'local') {
+      const started = await ensureLocalServer(model)
+      if (!started.ok) {
+        const failure = new Error(started.error)
+        failure.status = 0
+        throw failure
+      }
+    }
+    const settings = providerSettings()
+    const safeMessages = settings.provider === 'local' ? trimForContext(messages, settings.context) : messages
+    const payload = { model: model || DEFAULT_MODEL, stream: true, messages: safeMessages }
     let response = null
     let attempt = 0
     while (!response) {
@@ -426,6 +651,10 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'index.html'))
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 }
+
+app.on('will-quit', () => {
+  stopLocalServer()
+})
 
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'dark'

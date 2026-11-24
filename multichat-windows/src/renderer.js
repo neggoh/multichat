@@ -430,6 +430,48 @@ function messageContent(message, includeImages) {
   ]
 }
 
+function messageChars(message) {
+  const content = message?.content
+  if (typeof content === 'string') return content.length
+  if (Array.isArray(content)) {
+    return content.reduce((total, part) => total + (typeof part?.text === 'string' ? part.text.length : 0), 0)
+  }
+  return 0
+}
+
+/** Corta o histórico e os anexos para caber no contexto do modelo. */
+function trimMessages(messages, budgetChars) {
+  if (messages.length <= 1) return messages
+  const system = messages[0]
+  const rest = messages.slice(1)
+  let budget = Math.max(2000, budgetChars - system.content.length)
+  const kept = []
+
+  for (let index = rest.length - 1; index >= 0; index -= 1) {
+    const message = rest[index]
+    const size = messageChars(message)
+    const isLast = index === rest.length - 1
+
+    if (size <= budget) {
+      kept.unshift(message)
+      budget -= size
+      continue
+    }
+
+    if (isLast && typeof message.content === 'string') {
+      const cut = Math.max(500, budget - 200)
+      kept.unshift({
+        ...message,
+        content: `${message.content.slice(0, cut)}\n\n[... conteúdo cortado para caber no contexto do modelo ...]`,
+      })
+      budget = 0
+    }
+    break
+  }
+
+  return [system, ...kept]
+}
+
 function buildRequestMessages(conversation) {
   const history = conversation.messages
     .filter((message) => message.content.trim().length > 0 || (message.attachments ?? []).length > 0)
@@ -439,7 +481,10 @@ function buildRequestMessages(conversation) {
     role: message.role,
     content: messageContent(message, index === lastUserIndex),
   }))
-  return [{ role: 'system', content: SYSTEM_PROMPT }, ...mapped]
+  const model = state.models.find((item) => item.id === state.selectedModel)
+  const contextTokens = state.provider === 'local' ? model?.context ?? 8192 : model?.context ?? 32000
+  const budgetChars = Math.max(4000, Math.floor(contextTokens * 3.2) - 4000)
+  return trimMessages([{ role: 'system', content: SYSTEM_PROMPT }, ...mapped], budgetChars)
 }
 
 async function send() {
@@ -630,14 +675,19 @@ function bind() {
     renderConversations()
     renderMessages()
   })
-  els.model.addEventListener('change', () => {
+  els.model.addEventListener('change', async () => {
     state.selectedModel = els.model.value
     els.modelInfo.textContent =
       state.provider === 'local' ? 'local · sem limite' : modelLabel(state.models.find((m) => m.id === state.selectedModel))
     const conversation = current()
     if (conversation) conversation.model = state.selectedModel
     saveState()
-    if (state.provider === 'local') api.saveSettings({ localModel: state.selectedModel })
+    if (state.provider === 'local') {
+      await api.saveSettings({ localModel: state.selectedModel })
+      setStatus(`carregando ${state.selectedModel}...`)
+      const started = await api.startLocal(state.selectedModel)
+      setStatus(started.ok ? `IA local · ${state.selectedModel}` : started.error ?? 'não foi possível carregar')
+    }
   })
   els.provider.addEventListener('change', async () => {
     const next = els.provider.value === 'local' ? 'local' : 'openrouter'
