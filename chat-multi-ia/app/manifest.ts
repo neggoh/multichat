@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
     short_name: 'Chat Multi-IA',
     description:
       'Converse com dezenas de modelos gratuitos do OpenRouter em uma única interface, trocando de modelo sem perder o contexto.',
-    start_url: '/',
+    start_url: '/chat',
     display: 'standalone',
     background_color: '#0b0a14',
     theme_color: '#0b0a14',

@@ -36,7 +36,7 @@ cp .env.example .env      # preencha DATABASE_URL e OPENROUTER_API_KEY
 npm run db:push           # cria as tabelas Conversation e Message
 
 # 4. desenvolvimento
-npm run dev               # http://localhost:3000
+npm run dev               # http://localhost:3000 (landing) e /chat (aplicativo)
 ```
 
 Produção:
@@ -45,6 +45,9 @@ Produção:
 npm run build
 npm start
 ```
+
+A rota `/` é a página de apresentação, com os botões para a versão web (`/chat`) e para o
+executável do Windows (Releases do GitHub). O aplicativo em si fica em `/chat`.
 
 ## Variáveis de ambiente
 
@@ -64,7 +67,9 @@ app/
   api/conversations/   listar, carregar, renomear e apagar conversas
   api/files/process/   upload e análise de arquivos/ZIP/APK/PDF
   api/files/download/  gera ZIP do projeto a partir dos blocos de código
-  layout.tsx, page.tsx, globals.css, manifest.ts
+  page.tsx             landing: versão web e download do app Windows
+  chat/page.tsx        aplicativo de chat
+  layout.tsx, globals.css, manifest.ts
 components/chat/       interface do chat (sidebar, composer, bolhas, preview)
 components/ui/         shadcn/ui
 lib/                   tipos, acesso ao banco, parsing de anexos e de código
