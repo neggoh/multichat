@@ -8,7 +8,7 @@ Data: 24/11/2026 · Pasta pronta para versionar: `chat-multi-ia/` · ZIP: `entre
 |---|---|---|
 | `npm install` | falhava (conflito de peer com React 19) | ✅ instala (`.npmrc` com `legacy-peer-deps`) |
 | `tsc --noEmit` | 2 erros (`input-otp` ausente) | ✅ 0 erros |
-| `eslint .` | 12 erros | ✅ 0 erros (9 avisos de estilo) |
+| `eslint .` | 12 erros | ✅ 0 erros (5 avisos de estilo) |
 | `next build` | não verificado | ✅ compila e gera as 8 rotas |
 | `next start` | não verificado | ✅ `/` responde 200 |
 
@@ -23,7 +23,7 @@ Data: 24/11/2026 · Pasta pronta para versionar: `chat-multi-ia/` · ZIP: `entre
 7. **`components/chat/chat-app.tsx` — render em cascata** — o `clientId` era lido do `localStorage` num efeito e devolvido por `setState`, forçando um segundo ciclo de efeitos. Agora usa inicializador preguiçoso (`useState(readClientId)`), lido uma única vez no cliente.
 8. **`components/ui/command.tsx`** — interface vazia (`CommandDialogProps extends DialogProps {}`) trocada por `type`.
 9. **`tailwind.config.ts`** — `require('tailwindcss-animate')` virou `import`.
-10. **Código morto removido** — `components/viz/*`, `public/abacus-viz/*` (runtime de dashboards de outra plataforma, ~90 arquivos, nenhuma importação), `types/next-auth.d.ts` não é usado (mantido por ser inofensivo), `.abacus.donotdelete`, `.env` vazio e `tsconfig.tsbuildinfo` (cache de build).
+10. **Código morto removido** — `components/viz/*`, `public/abacus-viz/*` (runtime de dashboards de outra plataforma, ~90 arquivos, nenhuma importação), `types/next-auth.d.ts` (next-auth não é dependência), `scripts/safe-seed.ts` (apontava para um `scripts/seed.ts` inexistente), `.abacus.donotdelete`, `.env` vazio e `tsconfig.tsbuildinfo` (cache de build).
 
 ## Organização para o GitHub
 
@@ -49,6 +49,6 @@ Antes de rodar: preencha `LICENSE` com seu nome e crie o repositório vazio no G
 
 ## Pendências conhecidas (não bloqueiam)
 
-- 9 avisos de lint, todos cosméticos (imports não usados em `components/ui/*` e `types/next-auth.d.ts`).
+- 5 avisos de lint, todos cosméticos (imports não usados em `components/ui/*`).
 - O build exige `DATABASE_URL` e `OPENROUTER_API_KEY` definidos (mesmo que fictícios, como no CI); sem banco real, as rotas de histórico respondem com erro tratado e o chat mostra a mensagem de chave ausente.
 - Sem testes automatizados: o projeto não tinha suíte; o CI cobre tipos, lint e build.
