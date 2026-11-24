@@ -13,7 +13,7 @@
 param(
   [string]$Model = 'qwen2.5-1.5b',
   [int]$Port = 8080,
-  [int]$Threads = 4,
+  [int]$Threads = 8,
   [int]$Context = 4096,
   [string]$Root = (Join-Path $env:LOCALAPPDATA 'MultiChatLocalAI')
 )

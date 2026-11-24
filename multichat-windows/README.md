@@ -39,7 +39,30 @@ Para programar, use o Coder 7B:
 powershell -ExecutionPolicy Bypass -File scripts\local-ai.ps1 -Model qwen2.5-coder-7b
 ```
 
-O Qwen2.5-Coder foi treinado em 5,5 trilhões de tokens de código e é bem melhor que o modelo generalista em gerar, explicar e corrigir código. Em CPU sem AVX2, como um i7-3770, o 7B roda em ~4 threads e responde devagar (alguns tokens por segundo), mas funciona; o 3B é o meio-termo para máquinas assim.
+O Qwen2.5-Coder foi treinado em 5,5 trilhões de tokens de código e é bem melhor que o modelo generalista em gerar, explicar e corrigir código.
+
+### Velocidade medida nesta máquina
+
+Medições reais com `llama.cpp` (build de CPU), prompt fixo e 128 tokens de resposta, num i7-3770 (4 núcleos/8 threads, sem AVX2, sem GPU utilizável):
+
+| Modelo | Threads | Tokens/s |
+|--------|---------|----------|
+| `qwen2.5-1.5b` | 4 | **16,7** |
+| `qwen2.5-1.5b` | 8 | 14,7 |
+| `qwen2.5-coder-3b` | 4 | 8,7 |
+| `qwen2.5-coder-3b` | 8 | **9,0** |
+| `qwen2.5-coder-7b` | 4 | 4,0 |
+| `qwen2.5-coder-7b` | 8 | **4,2** |
+
+O tamanho do modelo domina: o 1.5B é ~4x mais rápido que o 7B. Threads rendem pouco — 8 threads ajudam o 3B e o 7B (~5%) e atrapalham o 1.5B. O padrão do script é 8.
+
+Para acelerar de verdade, nesta ordem:
+
+1. **Modelo menor** — `-Model qwen2.5-coder-3b` dobra a velocidade em relação ao 7B, com pouca perda em código comum.
+2. **Contexto menor** — `-Context 2048` em vez de 4096 reduz o custo por token.
+3. **Quantização mais leve** — um GGUF `q4_0` em vez de `q4_k_m` costuma render 10–20% em CPU.
+4. **GPU** — a HD 4000 não tem backend útil no llama.cpp; só uma placa dedicada mudaria o patamar.
+5. **Trabalho pesado no OpenRouter** — use o modelo local para o dia a dia sem cota e o OpenRouter para tarefas grandes.
 
 Se você já usa Ollama, basta apontar para `http://127.0.0.1:11434/v1`; no LM Studio, `http://127.0.0.1:1234/v1`.
 
