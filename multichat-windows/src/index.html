@@ -25,6 +25,7 @@
       <span class="chip" id="quota" hidden></span>
       <span class="spacer"></span>
       <span class="chip" id="key-chip">chave não configurada</span>
+      <button class="icon-btn" id="learn-btn" title="Aprendizado: lições e correções" aria-label="Aprendizado">🎓</button>
       <button class="icon-btn" id="tools-btn" title="Ferramentas e recursos" aria-label="Ferramentas">🧰</button>
       <button class="icon-btn" id="preview-btn" title="Visualizar projeto" aria-label="Visualizar projeto">▤</button>
       <button class="icon-btn" id="key-btn" title="Configurar chave do OpenRouter">🔑</button>
@@ -121,11 +122,64 @@
               usar GPU
             </label>
             <span class="local-status" id="gpu-info"></span>
+            <label class="field behavior-field">
+              <span>Instruções do sistema (opcional)</span>
+              <textarea id="system-prompt" rows="3" placeholder="Ex.: responda só com o código, sem explicações."></textarea>
+            </label>
+            <label class="toggle local-gpu" title="Não injeta persona, lições nem avisos do app">
+              <input type="checkbox" id="direct-mode" />
+              modo direto (sem instruções do app)
+            </label>
+            <label class="toggle local-gpu" title="Limita o tamanho da resposta para reduzir leitura">
+              <input type="checkbox" id="short-answers" />
+              respostas curtas
+            </label>
+            <label class="field">
+              <span>Limite de tokens por resposta</span>
+              <input id="max-tokens" type="number" min="64" max="8192" step="64" />
+            </label>
+            <span class="local-status" id="behavior-status"></span>
           </div>
         </div>
         <div class="modal-foot">
           <button class="btn ghost" value="cancel" id="key-cancel">Cancelar</button>
           <button class="btn primary" type="button" id="key-save">Salvar</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="learn-dialog">
+      <form method="dialog">
+        <div class="modal-head">
+          <h2>Aprendizado</h2>
+          <p>Registre o erro e a correção. Nas próximas mensagens o app injeta as lições relevantes no contexto da IA.</p>
+        </div>
+        <div class="modal-body">
+          <label class="field">
+            <span>O que a IA errou</span>
+            <textarea id="lesson-problem" rows="3" placeholder="Ex.: usou var em vez de const e não tratou o erro de fetch"></textarea>
+          </label>
+          <label class="field">
+            <span>Como deve ser</span>
+            <textarea id="lesson-fix" rows="3" placeholder="Ex.: use const/let, envolva o fetch em try/catch e mostre mensagem ao usuário"></textarea>
+          </label>
+          <label class="field">
+            <span>Marcadores (separados por vírgula)</span>
+            <input id="lesson-tags" type="text" placeholder="javascript, fetch, erros" />
+          </label>
+          <div class="local-row">
+            <span class="local-status" id="lesson-status"></span>
+            <button class="btn primary" type="button" id="lesson-save">Salvar lição</button>
+          </div>
+          <div class="lessons-head">
+            <span id="lessons-count">0 lições</span>
+            <span class="spacer"></span>
+            <button class="btn ghost" type="button" id="lessons-export">Exportar dataset</button>
+          </div>
+          <ul class="lessons-list" id="lessons-list"></ul>
+        </div>
+        <div class="modal-foot">
+          <button class="btn primary" value="cancel">Fechar</button>
         </div>
       </form>
     </dialog>
@@ -138,6 +192,12 @@
         </div>
         <div class="modal-body">
           <ul class="tools-list" id="tools-list"></ul>
+          <div class="paths-box">
+            <div class="paths-title">Onde os dados ficam</div>
+            <div class="paths-row"><span>Dados</span><code id="path-data">—</code></div>
+            <div class="paths-row"><span>Prévia</span><code id="path-preview">—</code></div>
+            <div class="paths-row"><span>Modelos</span><code id="path-models">—</code></div>
+          </div>
         </div>
         <div class="modal-foot">
           <button class="btn ghost" type="button" id="tools-models">Abrir pasta de modelos</button>

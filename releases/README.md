@@ -4,7 +4,8 @@ Binários prontos para uso, versionados junto do código para download direto pe
 
 | Arquivo | Versão | Tamanho | O que é |
 |---------|--------|---------|---------|
-| `MultiChat-1.1.2-portable.exe` | 1.1.2 | 72,8 MB | Aplicativo portátil (x64). Não instala nada: execute e use. |
+| `MultiChat-1.2.2-win-x64.zip` | 1.2.2 | ~119 MB | **Recomendado.** Extraia no disco D: e rode `MultiChat.exe`. Não usa o C: nem extrai em temp. |
+| `MultiChat-1.2.2-portable.exe` | 1.2.2 | 72,8 MB | Um arquivo só, mas extrai em `%TEMP%` (no C:) a cada execução. |
 
 A 1.0.1 corrigiu o overlay de arrastar-e-soltar que cobria a janela inteira; o anexo agora é acionado só pelo botão 📎 ao lado do campo de mensagem.
 
@@ -44,6 +45,30 @@ A 1.1.2 troca a prévia por um servidor real do projeto:
 - **Motor de prévia.** Os arquivos gerados são gravados em disco nas pastas corretas (`index.html`, `styles.css`, `script.js`, `src/…`) e servidos por um servidor HTTP local em `127.0.0.1`. O iframe carrega a URL, então caminhos relativos, CSS, JS, imagens e navegação funcionam como no site publicado.
 - **Projeto completo, não arquivo isolado.** A aba **Prévia** mostra o site rodando de verdade, com clique e interação, para achar bugs antes de hospedar.
 - A pasta da prévia fica no disco com espaço livre (ao lado dos modelos) e é recriada a cada atualização.
+
+A 1.1.3 move tudo para o disco D: e evita encher o C::
+
+- **Dados no D:.** Configurações, conversas e prévia ficam em `D:\MultiChat` (ou em `MULTICHAT_DATA`, se definido), com queda para o padrão do Windows só se o D: não existir.
+- **Versão em ZIP.** `MultiChat-1.1.3-win-x64.zip` roda extraído no D:, sem passar pelo `%TEMP%` do C: a cada abertura.
+- **Ferramentas mostram os caminhos.** O painel 🧰 lista onde ficam dados, prévia e modelos.
+
+A 1.2.0 adiciona aprendizado com memória persistente:
+
+- **Lições.** O botão 🎓 registra o erro e a correção, com marcadores. Ficam em `D:\MultiChat\lessons.json`.
+- **Injeção automática.** A cada mensagem, as lições com palavras em comum entram como mensagem de sistema antes do histórico, então a IA local evita repetir o erro. O contador de usos sobe a cada injeção.
+- **Dataset para treino.** **Exportar dataset** grava um JSONL no formato de chat, pronto para um fine-tuning LoRA quando houver GPU.
+
+A 1.2.2 deixa a resposta curta por padrão:
+
+- **Respostas curtas** ligadas de fábrica: o app envia `max_tokens` (512 por padrão) e o prompt de sistema pede ir ao ponto, sem preâmbulo nem resumo final.
+- **Limite de tokens** ajustável no diálogo 🔑 (64 a 8192). Desligar a caixa remove o limite.
+- Verificado com limite em 64: a resposta parou em 35 palavras em vez de parágrafos.
+
+A 1.2.1 deixa o comportamento da IA sob seu controle:
+
+- **Instruções do sistema editáveis.** Campo no diálogo 🔑: o texto que você escrever vira a mensagem de sistema enviada ao modelo.
+- **Modo direto.** Com a caixa marcada, o app não injeta persona, lições nem avisos — só as suas instruções e o histórico vão para a IA.
+- O modelo em si ainda pode recusar por conta do próprio treino; isso não é controlado pelo app.
 
 Gerado com `npm run dist` em `multichat-windows/`. Para regerar:
 

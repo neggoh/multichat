@@ -12,8 +12,9 @@ const FALLBACK_MODELS = [
 ]
 const SYSTEM_PROMPT = [
   'Você é um assistente técnico prestativo e direto. Responda sempre em português do Brasil.',
+  'Seja breve: vá ao ponto na primeira frase, sem preâmbulo, sem repetir a pergunta e sem resumo final.',
+  'Entregue o resultado (código, comando, resposta) e no máximo uma frase de contexto. Só expanda se o usuário pedir.',
   'Use Markdown quando ajudar (negrito, listas, tabelas) e sempre que mostrar código use blocos com a linguagem.',
-  'Seja preciso e evite enrolação.',
 ].join('\n')
 
 const $ = (id) => document.getElementById(id)
@@ -46,6 +47,11 @@ const els = {
   localTest: $('local-test'),
   localGpu: $('local-gpu'),
   gpuInfo: $('gpu-info'),
+  systemPrompt: $('system-prompt'),
+  directMode: $('direct-mode'),
+  shortAnswers: $('short-answers'),
+  maxTokens: $('max-tokens'),
+  behaviorStatus: $('behavior-status'),
   preview: $('preview'),
   previewBtn: $('preview-btn'),
   previewClose: $('preview-close'),
@@ -59,6 +65,19 @@ const els = {
   toolsBtn: $('tools-btn'),
   toolsDialog: $('tools-dialog'),
   toolsList: $('tools-list'),
+  pathData: $('path-data'),
+  pathPreview: $('path-preview'),
+  pathModels: $('path-models'),
+  learnBtn: $('learn-btn'),
+  learnDialog: $('learn-dialog'),
+  lessonProblem: $('lesson-problem'),
+  lessonFix: $('lesson-fix'),
+  lessonTags: $('lesson-tags'),
+  lessonStatus: $('lesson-status'),
+  lessonSave: $('lesson-save'),
+  lessonsCount: $('lessons-count'),
+  lessonsList: $('lessons-list'),
+  lessonsExport: $('lessons-export'),
   toolsModels: $('tools-models'),
   toolsScripts: $('tools-scripts'),
 }
@@ -78,6 +97,8 @@ const state = {
   attaching: false,
   previewTab: 'preview',
   projectFiles: [],
+  systemPrompt: '',
+  directMode: false,
 }
 
 /* ------------------------------- persistência ------------------------------- */
@@ -508,7 +529,10 @@ function buildRequestMessages(conversation) {
   const model = state.models.find((item) => item.id === state.selectedModel)
   const contextTokens = state.provider === 'local' ? model?.context ?? 8192 : model?.context ?? 32000
   const budgetChars = Math.max(4000, Math.floor(contextTokens * 3.2) - 4000)
-  return trimMessages([{ role: 'system', content: SYSTEM_PROMPT }, ...mapped], budgetChars)
+  const custom = (state.systemPrompt ?? '').trim()
+  const system = custom || (state.directMode ? '' : SYSTEM_PROMPT)
+  const head = system ? [{ role: 'system', content: system }] : []
+  return trimMessages([...head, ...mapped], budgetChars)
 }
 
 async function send() {
@@ -739,13 +763,34 @@ function bind() {
       els.localStatus.textContent = result.error ?? 'não foi possível conectar'
     }
   })
-  els.localGpu.addEventListener('change', async () => {
-    await api.saveSettings({ localGpuLayers: els.localGpu.checked ? 99 : 0 })
+  els.localGpu.addEventListener('change', async () => {    await api.saveSettings({ localGpuLayers: els.localGpu.checked ? 99 : 0 })
     els.gpuInfo.className = 'local-status'
     els.gpuInfo.textContent = els.localGpu.checked
       ? 'GPU ligada: o modelo será recarregado na próxima mensagem'
       : 'GPU desligada: processamento na CPU'
   })
+  const saveBehavior = async () => {
+    state.systemPrompt = els.systemPrompt.value
+    state.directMode = els.directMode.checked
+    state.shortAnswers = els.shortAnswers.checked
+    const maxTokens = Number(els.maxTokens.value) || 512
+    await api.saveSettings({
+      systemPrompt: state.systemPrompt,
+      directMode: state.directMode,
+      shortAnswers: state.shortAnswers,
+      maxTokens,
+    })
+    els.behaviorStatus.className = 'local-status ok'
+    const parts = []
+    parts.push(state.directMode ? 'modo direto: só as suas instruções vão para a IA' : 'instruções do app ativas')
+    parts.push(state.shortAnswers ? `respostas curtas (até ${maxTokens} tokens)` : 'respostas sem limite de tamanho')
+    els.behaviorStatus.textContent = parts.join(' · ')
+  }
+  els.systemPrompt.addEventListener('change', saveBehavior)
+  els.directMode.addEventListener('change', saveBehavior)
+  els.shortAnswers.addEventListener('change', saveBehavior)
+  els.maxTokens.addEventListener('change', saveBehavior)
+
   els.input.addEventListener('input', autoGrow)
   els.input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -958,6 +1003,18 @@ const TOOLS = [
   { icon: '🔒', title: 'Chave protegida', text: 'Criptografada pelo Windows (DPAPI), usada só no processo principal.' },
 ]
 
+async function renderLessons() {
+  const result = await api.lessons()
+  const lessons = result.lessons ?? []
+  els.lessonsCount.textContent = `${lessons.length} lição${lessons.length === 1 ? '' : 'ões'}`
+  els.lessonsList.innerHTML = ''
+  for (const lesson of lessons) {
+    const item = document.createElement('li')
+    item.innerHTML = `<div class="lesson-body"><strong>${escapeHtml(lesson.problem)}</strong><span>${escapeHtml(lesson.fix)}</span></div><span class="lesson-meta">${lesson.uses ?? 0}×</span><button type="button" data-lesson="${escapeHtml(lesson.id)}">remover</button>`
+    els.lessonsList.append(item)
+  }
+}
+
 function bindPreview() {
   els.previewBtn.addEventListener('click', () => {
     if (els.preview.hidden) openPreview()
@@ -982,6 +1039,47 @@ function bindPreview() {
     })
   })
 
+  els.learnBtn.addEventListener('click', async () => {
+    els.lessonStatus.textContent = ''
+    els.lessonStatus.className = 'local-status'
+    await renderLessons()
+    els.learnDialog.showModal()
+  })
+  els.lessonSave.addEventListener('click', async () => {
+    const result = await api.addLesson({
+      problem: els.lessonProblem.value,
+      fix: els.lessonFix.value,
+      tags: els.lessonTags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
+    })
+    if (result.ok) {
+      els.lessonStatus.className = 'local-status ok'
+      els.lessonStatus.textContent = `lição salva · ${result.total} no total`
+      els.lessonProblem.value = ''
+      els.lessonFix.value = ''
+      els.lessonTags.value = ''
+      await renderLessons()
+    } else {
+      els.lessonStatus.className = 'local-status err'
+      els.lessonStatus.textContent = result.error ?? 'não foi possível salvar'
+    }
+  })
+  els.lessonsExport.addEventListener('click', async () => {
+    const result = await api.exportLessons()
+    if (result.ok) {
+      els.lessonStatus.className = 'local-status ok'
+      els.lessonStatus.textContent = `dataset com ${result.count} exemplo(s) salvo`
+    } else if (result.ok === false && !result.canceled) {
+      els.lessonStatus.className = 'local-status err'
+      els.lessonStatus.textContent = result.error ?? 'não foi possível exportar'
+    }
+  })
+  els.lessonsList.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-lesson]')
+    if (!button) return
+    await api.removeLesson(button.getAttribute('data-lesson'))
+    await renderLessons()
+  })
+
   els.toolsBtn.addEventListener('click', async () => {
     els.toolsList.innerHTML = ''
     for (const tool of TOOLS) {
@@ -989,6 +1087,10 @@ function bindPreview() {
       item.innerHTML = `<span class="tool-icon">${tool.icon}</span><div><strong>${escapeHtml(tool.title)}</strong><p>${escapeHtml(tool.text)}</p></div>`
       els.toolsList.append(item)
     }
+    const paths = await api.paths()
+    els.pathData.textContent = paths.data ?? '—'
+    els.pathPreview.textContent = paths.preview ?? '—'
+    els.pathModels.textContent = paths.models ?? '—'
     els.toolsDialog.showModal()
   })
   els.toolsModels.addEventListener('click', async () => {
@@ -1034,6 +1136,13 @@ async function boot() {
   els.provider.value = state.provider
   els.localUrl.value = state.localBaseUrl
   els.localGpu.checked = Number(settings.gpuLayers ?? 0) > 0
+  state.systemPrompt = settings.systemPrompt ?? ''
+  state.directMode = settings.directMode === true
+  els.systemPrompt.value = state.systemPrompt
+  els.directMode.checked = state.directMode
+  state.shortAnswers = settings.shortAnswers !== false
+  els.shortAnswers.checked = state.shortAnswers
+  els.maxTokens.value = String(settings.maxTokens ?? 512)
   if (settings.model) state.selectedModel = settings.model
 
   const gpu = await api.gpu()

@@ -26,7 +26,29 @@ const DEFAULT_MODEL = 'deepseek/deepseek-chat-v3-0324:free'
 const DEFAULT_LOCAL_BASE = 'http://127.0.0.1:8080/v1'
 const DEFAULT_LOCAL_CONTEXT = 8192
 
-const dataDir = () => app.getPath('userData')
+/** Raiz dos dados: prefere o disco com espaço (D:) e cai para o padrão do Windows. */
+function pickDataRoot() {
+  const candidates = [process.env.MULTICHAT_DATA, 'D:/MultiChat', path.join(os.homedir(), 'MultiChat')].filter(Boolean)
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true })
+      fs.accessSync(candidate, fs.constants.W_OK)
+      return candidate
+    } catch {
+      // tenta o próximo
+    }
+  }
+  return app.getPath('userData')
+}
+
+const DATA_ROOT = pickDataRoot()
+try {
+  app.setPath('userData', DATA_ROOT)
+} catch {
+  // mantém o padrão do Windows
+}
+
+const dataDir = () => DATA_ROOT
 const storePath = () => path.join(dataDir(), 'multichat.json')
 
 const activeRequests = new Map()
@@ -152,6 +174,10 @@ function providerSettings() {
     dir: String(store.localDir ?? defaultLocalDir()),
     context: Number(store.localContext ?? DEFAULT_LOCAL_CONTEXT) || DEFAULT_LOCAL_CONTEXT,
     gpuLayers: Number.isFinite(Number(store.localGpuLayers)) ? Number(store.localGpuLayers) : 0,
+    systemPrompt: String(store.systemPrompt ?? ''),
+    directMode: store.directMode === true,
+    shortAnswers: store.shortAnswers !== false,
+    maxTokens: Number(store.maxTokens ?? 512) || 512,
   }
 }
 
@@ -176,7 +202,7 @@ function detectGpu() {
 }
 
 function defaultLocalDir() {
-  const candidates = ['D:/chat/local-ai', path.join(os.homedir(), 'MultiChatLocalAI'), path.join(app.getPath('userData'), 'models')]
+  const candidates = ['D:/chat/local-ai', path.join(DATA_ROOT, 'models'), path.join(os.homedir(), 'MultiChatLocalAI')]
   for (const candidate of candidates) {
     try {
       if (fs.existsSync(candidate)) return candidate
@@ -500,6 +526,10 @@ ipcMain.handle('settings:save', (_event, next) => {
   if (typeof next?.localDir === 'string') store.localDir = next.localDir.trim()
   if (Number.isFinite(Number(next?.localContext)) && Number(next.localContext) > 0) store.localContext = Number(next.localContext)
   if (Number.isFinite(Number(next?.localGpuLayers)) && Number(next.localGpuLayers) >= 0) store.localGpuLayers = Number(next.localGpuLayers)
+  if (typeof next?.systemPrompt === 'string') store.systemPrompt = next.systemPrompt
+  if (typeof next?.directMode === 'boolean') store.directMode = next.directMode
+  if (typeof next?.shortAnswers === 'boolean') store.shortAnswers = next.shortAnswers
+  if (Number.isFinite(Number(next?.maxTokens)) && Number(next.maxTokens) >= 64) store.maxTokens = Number(next.maxTokens)
   writeStore(store)
   return { ok: true, ...providerSettings() }
 })
@@ -515,6 +545,12 @@ ipcMain.handle('local:stop', () => {
 })
 
 ipcMain.handle('local:gpu', () => detectGpu())
+
+ipcMain.handle('app:paths', () => ({
+  data: DATA_ROOT,
+  preview: previewRoot(),
+  models: defaultLocalDir(),
+}))
 
 ipcMain.handle('project:export', async (event, payload) => {
   const files = Array.isArray(payload?.files) ? payload.files : []
@@ -600,6 +636,7 @@ const previewState = { server: null, port: 0, root: '' }
 /** Pasta da prévia: usa o disco dos modelos (com espaço) e cai para o temp. */
 function previewRoot() {
   const candidates = [
+    path.join(DATA_ROOT, 'preview'),
     path.join(path.dirname(defaultLocalDir()), '.preview'),
     path.join(os.tmpdir(), 'multichat-preview'),
   ]
@@ -719,6 +756,115 @@ ipcMain.handle('files:process', async (_event, paths) => {
 })
 
 
+/* -------------------------------- aprendizagem ------------------------------ */
+
+const lessonsPath = () => path.join(DATA_ROOT, 'lessons.json')
+
+function readLessons() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(lessonsPath(), 'utf8'))
+    return Array.isArray(raw) ? raw : []
+  } catch {
+    return []
+  }
+}
+
+function writeLessons(list) {
+  fs.mkdirSync(DATA_ROOT, { recursive: true })
+  fs.writeFileSync(lessonsPath(), JSON.stringify(list, null, 2), 'utf8')
+}
+
+const STOPWORDS = new Set([
+  'a', 'o', 'e', 'de', 'da', 'do', 'em', 'um', 'uma', 'para', 'com', 'que', 'nao', 'não',
+  'the', 'and', 'for', 'with', 'this', 'that', 'is', 'are', 'to', 'of', 'in', 'on',
+])
+
+function words(text) {
+  return String(text ?? '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length > 2 && !STOPWORDS.has(word))
+}
+
+/** Lições relevantes por sobreposição de palavras, com desempate por uso recente. */
+function matchLessons(text, limit = 4) {
+  const lessons = readLessons()
+  if (lessons.length === 0) return []
+  const target = new Set(words(text))
+  if (target.size === 0) return []
+  const scored = lessons.map((lesson) => {
+    const bag = new Set([...words(lesson.problem), ...words(lesson.fix), ...words((lesson.tags ?? []).join(' '))])
+    let hits = 0
+    for (const word of bag) if (target.has(word)) hits += 1
+    return { lesson, score: hits / Math.max(6, bag.size) }
+  })
+  return scored
+    .filter((item) => item.score > 0.08)
+    .sort((a, b) => b.score - a.score || (b.lesson.usedAt ?? 0) - (a.lesson.usedAt ?? 0))
+    .slice(0, limit)
+    .map((item) => item.lesson)
+}
+
+function lessonsPrompt(lessons) {
+  if (lessons.length === 0) return ''
+  const lines = lessons.map((lesson, index) => `${index + 1}. Erro: ${lesson.problem}\n   Correção: ${lesson.fix}`)
+  return `Lições aprendidas com correções anteriores do usuário. Siga-as e não repita estes erros:\n${lines.join('\n')}`
+}
+
+ipcMain.handle('lessons:list', () => ({ ok: true, lessons: readLessons() }))
+
+ipcMain.handle('lessons:add', (event, payload) => {
+  const problem = String(payload?.problem ?? '').trim()
+  const fix = String(payload?.fix ?? '').trim()
+  if (!problem || !fix) return { ok: false, error: 'descreva o erro e a correção' }
+  const tags = Array.isArray(payload?.tags) ? payload.tags.map((tag) => String(tag).trim()).filter(Boolean) : []
+  const lessons = readLessons()
+  const lesson = {
+    id: `l${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    problem,
+    fix,
+    tags,
+    createdAt: Date.now(),
+    usedAt: 0,
+    uses: 0,
+  }
+  lessons.unshift(lesson)
+  writeLessons(lessons.slice(0, 500))
+  return { ok: true, lesson, total: Math.min(lessons.length, 500) }
+})
+
+ipcMain.handle('lessons:remove', (event, id) => {
+  const lessons = readLessons().filter((lesson) => lesson.id !== id)
+  writeLessons(lessons)
+  return { ok: true, total: lessons.length }
+})
+
+ipcMain.handle('lessons:match', (event, text) => ({ ok: true, lessons: matchLessons(text) }))
+
+/** Dataset JSONL no formato de chat, para um fine-tuning LoRA futuro. */
+ipcMain.handle('lessons:export', async () => {
+  const lessons = readLessons()
+  if (lessons.length === 0) return { ok: false, error: 'nenhuma lição registrada ainda' }
+  const result = await dialog.showSaveDialog({
+    title: 'Exportar dataset de aprendizado',
+    defaultPath: path.join(DATA_ROOT, 'multichat-dataset.jsonl'),
+    filters: [{ name: 'JSONL', extensions: ['jsonl'] }],
+  })
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+  const lines = lessons.map((lesson) =>
+    JSON.stringify({
+      messages: [
+        { role: 'system', content: 'Você é um assistente de programação que evita erros já corrigidos.' },
+        { role: 'user', content: lesson.problem },
+        { role: 'assistant', content: lesson.fix },
+      ],
+    })
+  )
+  fs.writeFileSync(result.filePath, `${lines.join('\n')}\n`, 'utf8')
+  return { ok: true, count: lines.length, file: result.filePath }
+})
+
 ipcMain.handle('chat:stream', async (event, request) => {
   const { requestId, model, messages } = request ?? {}
   const controller = new AbortController()
@@ -734,8 +880,27 @@ ipcMain.handle('chat:stream', async (event, request) => {
       }
     }
     const settings = providerSettings()
-    const safeMessages = settings.provider === 'local' ? trimForContext(messages, settings.context) : messages
+    const base = settings.provider === 'local' ? trimForContext(messages, settings.context) : messages
+    let safeMessages = base
+    if (settings.systemPrompt.trim()) {
+      safeMessages = [{ role: 'system', content: settings.systemPrompt.trim() }, ...safeMessages]
+    }
+    const lastUser = [...base].reverse().find((message) => message.role === 'user')
+    const relevant = settings.directMode ? [] : matchLessons(lastUser?.content ?? '')
+    if (relevant.length > 0) {
+      safeMessages = [{ role: 'system', content: lessonsPrompt(relevant) }, ...safeMessages]
+      const lessons = readLessons()
+      const now = Date.now()
+      for (const lesson of lessons) {
+        if (relevant.some((item) => item.id === lesson.id)) {
+          lesson.uses = (lesson.uses ?? 0) + 1
+          lesson.usedAt = now
+        }
+      }
+      writeLessons(lessons)
+    }
     const payload = { model: model || DEFAULT_MODEL, stream: true, messages: safeMessages }
+    if (settings.shortAnswers) payload.max_tokens = settings.maxTokens
     let response = null
     let attempt = 0
     while (!response) {
