@@ -8,6 +8,11 @@ contextBridge.exposeInMainWorld('multichat', {
   saveSettings: (next) => ipcRenderer.invoke('settings:save', next),
   startLocal: (model) => ipcRenderer.invoke('local:start', model),
   stopLocal: () => ipcRenderer.invoke('local:stop'),
+  gpu: () => ipcRenderer.invoke('local:gpu'),
+  exportProject: (payload) => ipcRenderer.invoke('project:export', payload),
+  servePreview: (payload) => ipcRenderer.invoke('preview:serve', payload),
+  openPreview: () => ipcRenderer.invoke('preview:open'),
+  openPath: (target) => ipcRenderer.invoke('app:openPath', target),
   chat: (request) => ipcRenderer.invoke('chat:stream', request),
   abort: (requestId) => ipcRenderer.invoke('chat:abort', requestId),
   onDelta: (callback) => {

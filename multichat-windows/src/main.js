@@ -13,6 +13,7 @@ const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, nativeTheme, dial
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
+const http = require('node:http')
 const { spawn } = require('node:child_process')
 const {
   processFile,
@@ -150,7 +151,28 @@ function providerSettings() {
     model: String(store.localModel ?? ''),
     dir: String(store.localDir ?? defaultLocalDir()),
     context: Number(store.localContext ?? DEFAULT_LOCAL_CONTEXT) || DEFAULT_LOCAL_CONTEXT,
+    gpuLayers: Number.isFinite(Number(store.localGpuLayers)) ? Number(store.localGpuLayers) : 0,
   }
+}
+
+/** Detecta GPU utilizável pelo llama.cpp: NVIDIA (CUDA) ou Vulkan. */
+function detectGpu() {
+  const { execFileSync } = require('node:child_process')
+  try {
+    const output = execFileSync('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 8000,
+    })
+    const line = output.split(/\r?\n/).find((item) => item.trim().length > 0)
+    if (line) {
+      const [name, memory] = line.split(',').map((part) => part.trim())
+      return { vendor: 'nvidia', name, memory, backend: 'CUDA' }
+    }
+  } catch {
+    // sem NVIDIA
+  }
+  return { vendor: 'none', name: '', memory: '', backend: 'CPU' }
 }
 
 function defaultLocalDir() {
@@ -188,12 +210,14 @@ function scanLocalModels(dir) {
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
-function findServerBinary(dir) {
-  const candidates = [
-    path.join(dir, 'llama', 'llama-server.exe'),
-    path.join(dir, 'llama-server.exe'),
-    path.join(dir, 'llama.cpp', 'llama-server.exe'),
-  ]
+function findServerBinary(dir, gpuLayers) {
+  const folders = gpuLayers > 0 ? ['llama-cuda', 'llama-vulkan', 'llama'] : ['llama', 'llama-cuda', 'llama-vulkan']
+  const candidates = []
+  for (const folder of folders) {
+    candidates.push(path.join(dir, folder, 'llama-server.exe'))
+    candidates.push(path.join(dir, `${folder}-server.exe`))
+  }
+  candidates.push(path.join(dir, 'llama-server.exe'))
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? null
 }
 
@@ -315,7 +339,7 @@ async function ensureLocalServer(modelId) {
     return { ok: false, error: `O modelo ${wanted} não está em ${settings.dir}.` }
   }
 
-  const binary = findServerBinary(settings.dir)
+  const binary = findServerBinary(settings.dir, settings.gpuLayers)
   if (!binary) {
     return { ok: false, error: `llama-server.exe não encontrado em ${settings.dir}. Rode scripts/local-ai.ps1 uma vez.` }
   }
@@ -331,7 +355,15 @@ async function ensureLocalServer(modelId) {
 
   const proc = spawn(
     binary,
-    ['-m', target.path, '--host', '127.0.0.1', '--port', String(port), '-c', String(settings.context), '-t', String(Math.max(4, os.cpus().length)), '--no-warmup'],
+    [
+      '-m', target.path,
+      '--host', '127.0.0.1',
+      '--port', String(port),
+      '-c', String(settings.context),
+      '-t', String(Math.max(4, os.cpus().length)),
+      '-ngl', String(settings.gpuLayers),
+      '--no-warmup',
+    ],
     { cwd: settings.dir, stdio: 'ignore', windowsHide: true }
   )
   localServer.proc = proc
@@ -467,6 +499,7 @@ ipcMain.handle('settings:save', (_event, next) => {
   if (typeof next?.localModel === 'string') store.localModel = next.localModel
   if (typeof next?.localDir === 'string') store.localDir = next.localDir.trim()
   if (Number.isFinite(Number(next?.localContext)) && Number(next.localContext) > 0) store.localContext = Number(next.localContext)
+  if (Number.isFinite(Number(next?.localGpuLayers)) && Number(next.localGpuLayers) >= 0) store.localGpuLayers = Number(next.localGpuLayers)
   writeStore(store)
   return { ok: true, ...providerSettings() }
 })
@@ -479,6 +512,47 @@ ipcMain.handle('local:start', async (_event, model) => {
 ipcMain.handle('local:stop', () => {
   stopLocalServer()
   return { ok: true }
+})
+
+ipcMain.handle('local:gpu', () => detectGpu())
+
+ipcMain.handle('project:export', async (event, payload) => {
+  const files = Array.isArray(payload?.files) ? payload.files : []
+  if (files.length === 0) return { ok: false, error: 'Nenhum arquivo para exportar.' }
+
+  const win = BrowserWindow.fromWebContents(event.sender)
+  const result = await dialog.showSaveDialog(win, {
+    title: 'Salvar projeto',
+    defaultPath: `${String(payload?.name ?? 'projeto').replace(/[^\w.-]+/g, '-')}.zip`,
+    filters: [{ name: 'ZIP', extensions: ['zip'] }],
+  })
+  if (result.canceled || !result.filePath) return { ok: true, canceled: true }
+
+  try {
+    const JSZip = require('jszip')
+    const zip = new JSZip()
+    for (const file of files) {
+      const name = String(file?.name ?? '').replace(/^[/\\]+/, '').replace(/\.\./g, '')
+      if (!name) continue
+      zip.file(name, String(file?.content ?? ''))
+    }
+    const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+    await fs.promises.writeFile(result.filePath, buffer)
+    return { ok: true, path: result.filePath, count: files.length }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
+})
+
+ipcMain.handle('app:openPath', async (_event, target) => {
+  const value = String(target ?? '')
+  if (!value) return { ok: false }
+  try {
+    const error = await shell.openPath(value)
+    return error ? { ok: false, error } : { ok: true }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
 })
 
 /* ---------------------------------- anexos ---------------------------------- */
@@ -498,6 +572,130 @@ async function processPaths(paths) {
   }
   return { ok: true, files, errors }
 }
+
+/* ------------------------------ prévia do projeto --------------------------- */
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/plain; charset=utf-8',
+}
+
+const previewState = { server: null, port: 0, root: '' }
+
+/** Pasta da prévia: usa o disco dos modelos (com espaço) e cai para o temp. */
+function previewRoot() {
+  const candidates = [
+    path.join(path.dirname(defaultLocalDir()), '.preview'),
+    path.join(os.tmpdir(), 'multichat-preview'),
+  ]
+  for (const candidate of candidates) {
+    try {
+      fs.mkdirSync(candidate, { recursive: true })
+      return candidate
+    } catch {
+      // tenta o próximo
+    }
+  }
+  return path.join(os.tmpdir(), 'multichat-preview')
+}
+
+/** Caminho relativo seguro: sem `..`, sem absoluto, sem unidade de disco. */
+function safeRelative(name) {
+  const cleaned = String(name ?? '')
+    .replace(/\\/g, '/')
+    .replace(/^[a-zA-Z]:/, '')
+    .replace(/^\/+/, '')
+  if (!cleaned || cleaned.split('/').includes('..')) return null
+  return cleaned
+}
+
+function startPreviewServer() {
+  if (previewState.server) return Promise.resolve(previewState.port)
+  const root = previewRoot()
+  previewState.root = root
+
+  const server = http.createServer((request, response) => {
+    let pathname = '/'
+    try {
+      pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname)
+    } catch {
+      pathname = '/'
+    }
+    let relative = pathname.replace(/^\/+/, '')
+    if (!relative || relative.endsWith('/')) relative += 'index.html'
+    const target = path.join(root, relative)
+    if (!target.startsWith(root)) {
+      response.writeHead(403).end('fora da raiz')
+      return
+    }
+    fs.readFile(target, (error, data) => {
+      if (error) {
+        response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('não encontrado')
+        return
+      }
+      const type = MIME[path.extname(target).toLowerCase()] ?? 'application/octet-stream'
+      response.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' }).end(data)
+    })
+  })
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      previewState.server = server
+      previewState.port = server.address().port
+      resolve(previewState.port)
+    })
+  })
+}
+
+ipcMain.handle('preview:serve', async (event, payload) => {
+  try {
+    const files = Array.isArray(payload?.files) ? payload.files : []
+    if (files.length === 0) return { ok: false, error: 'nenhum arquivo para visualizar' }
+
+    const root = previewRoot()
+    previewState.root = root
+    fs.rmSync(root, { recursive: true, force: true })
+    fs.mkdirSync(root, { recursive: true })
+
+    let written = 0
+    for (const file of files) {
+      const relative = safeRelative(file?.name)
+      if (!relative) continue
+      const target = path.join(root, relative)
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, String(file?.content ?? ''), 'utf8')
+      written += 1
+    }
+    if (written === 0) return { ok: false, error: 'nenhum arquivo válido' }
+
+    const port = await startPreviewServer()
+    return { ok: true, url: `http://127.0.0.1:${port}/`, count: written, root }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
+})
+
+ipcMain.handle('preview:open', async () => {
+  if (!previewState.server) return { ok: false, error: 'prévia não iniciada' }
+  await shell.openExternal(`http://127.0.0.1:${previewState.port}/`)
+  return { ok: true }
+})
 
 ipcMain.handle('files:pick', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender)

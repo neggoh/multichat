@@ -10,6 +10,31 @@ Aplicativo de desktop para Windows que reúne vários modelos de IA em uma só c
 
 O seletor lista **todos** os modelos de texto do OpenRouter (hoje ~450), com os gratuitos no topo e marcados. A caixa **só grátis** (ligada por padrão) restringe a lista aos modelos de preço zero; desligue-a para usar os pagos, que aparecem com o preço por milhão de tokens de entrada no chip ao lado do seletor. Modelos com visão aceitam imagem anexada.
 
+## Prévia de projeto e download
+
+O botão **▤** abre o painel de projeto ao lado do chat. Ele lê os blocos de código das respostas do assistente e monta um projeto navegável:
+
+- aba **Prévia** — o projeto completo rodando num servidor HTTP local: os arquivos são gravados em disco nas pastas corretas e o iframe carrega a URL, então CSS, JS, imagens e caminhos relativos funcionam como no site publicado; dá para clicar e testar antes de hospedar;
+- abas por arquivo — o código de cada arquivo gerado (`index.html`, `styles.css`, `script.js`…), em modo VS Code: linha por linha, numerada, com contagem de linhas, linguagem e botão **Copiar**;
+- **Atualizar** — relê as respostas da conversa atual;
+- **Baixar ZIP** — exporta todos os arquivos com diálogo nativo de salvar.
+
+No chat o código não aparece: cada bloco vira uma nota compacta com o nome do arquivo, o número de linhas e o botão **Ver na prévia**, que abre o painel já naquele arquivo. A conversa fica só com a descrição e os passos.
+
+Os nomes vêm de comentários no início do bloco (`// src/App.tsx`, `<!-- index.html -->`) ou do padrão da linguagem, com sufixo `-2`, `-3` quando repetem.
+
+O botão **🧰** lista as ferramentas disponíveis e abre a pasta de modelos ou a de scripts no Explorer.
+
+## GPU
+
+Com uma placa NVIDIA, marque **usar GPU** no diálogo da chave: o app sobe o `llama-server` com `-ngl 99` e usa o build CUDA. Sem NVIDIA, a caixa fica desabilitada e o processamento continua na CPU. O script também detecta sozinho:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\local-ai.ps1 -Model qwen2.5-coder-7b -Gpu
+```
+
+Uma GPU de 8 GB comporta o Coder 7B inteiro na VRAM, o que costuma multiplicar a velocidade por 5 a 15 em relação a esta CPU.
+
 ## IA local, sem limite
 
 O seletor **OpenRouter / IA local** no topo troca a origem das respostas. No modo local o app fala com qualquer servidor compatível com OpenAI rodando na sua máquina — llama.cpp, Ollama ou LM Studio — sem chave, sem cota e sem internet.

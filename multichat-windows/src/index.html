@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; frame-src http://127.0.0.1:*; form-action 'none'; base-uri 'none'"
     />
     <title>MultiChat</title>
     <link rel="stylesheet" href="styles.css" />
@@ -25,6 +25,8 @@
       <span class="chip" id="quota" hidden></span>
       <span class="spacer"></span>
       <span class="chip" id="key-chip">chave não configurada</span>
+      <button class="icon-btn" id="tools-btn" title="Ferramentas e recursos" aria-label="Ferramentas">🧰</button>
+      <button class="icon-btn" id="preview-btn" title="Visualizar projeto" aria-label="Visualizar projeto">▤</button>
       <button class="icon-btn" id="key-btn" title="Configurar chave do OpenRouter">🔑</button>
       <button class="icon-btn" id="new-btn" title="Nova conversa">＋</button>
     </header>
@@ -61,6 +63,30 @@
           </div>
         </footer>
       </section>
+
+      <section class="preview" id="preview" hidden>
+        <div class="preview-head">
+          <strong>Projeto</strong>
+          <span class="chip" id="preview-count">0 arquivos</span>
+          <span class="spacer"></span>
+          <button class="btn ghost" id="preview-refresh" title="Recarregar a partir das respostas">Atualizar</button>
+          <button class="btn ghost" id="preview-zip" title="Baixar os arquivos do projeto em ZIP">Baixar ZIP</button>
+          <button class="icon-btn" id="preview-close" title="Fechar">✕</button>
+        </div>
+        <div class="preview-tabs" id="preview-tabs"></div>
+        <div class="preview-body">
+          <iframe
+            id="preview-frame"
+            title="Pré-visualização do projeto"
+            sandbox="allow-scripts allow-forms allow-modals allow-popups"
+          ></iframe>
+          <div class="preview-code" id="preview-code" hidden></div>
+          <div class="preview-empty" id="preview-empty">
+            Peça um site ou componente no chat. Os blocos de código viram um projeto visualizável aqui,
+            antes de você hospedar.
+          </div>
+        </div>
+      </section>
     </main>
 
     <dialog id="key-dialog">
@@ -73,7 +99,7 @@
           </p>
         </div>
         <div class="modal-body">
-          <input id="key-input" type="password" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false" />
+          <input id="key-input" type="password" placeholder="sk-or-v1-..." autocomplete="off" spellcheck="false" />
           <div class="note">
             Obtenha uma chave gratuita em
             <a id="keys-link" href="#">openrouter.ai/keys</a>. Modelos gratuitos aparecem no seletor do topo.
@@ -90,11 +116,33 @@
               <span class="local-status" id="local-status"></span>
               <button class="btn ghost" type="button" id="local-test">Testar e usar</button>
             </div>
+            <label class="toggle local-gpu" title="Coloca as camadas do modelo na placa de vídeo">
+              <input type="checkbox" id="local-gpu" />
+              usar GPU
+            </label>
+            <span class="local-status" id="gpu-info"></span>
           </div>
         </div>
         <div class="modal-foot">
           <button class="btn ghost" value="cancel" id="key-cancel">Cancelar</button>
           <button class="btn primary" type="button" id="key-save">Salvar</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="tools-dialog">
+      <form method="dialog">
+        <div class="modal-head">
+          <h2>Ferramentas e recursos</h2>
+          <p>O que este app já consegue fazer sem sair da máquina.</p>
+        </div>
+        <div class="modal-body">
+          <ul class="tools-list" id="tools-list"></ul>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" type="button" id="tools-models">Abrir pasta de modelos</button>
+          <button class="btn ghost" type="button" id="tools-scripts">Abrir pasta de scripts</button>
+          <button class="btn primary" value="cancel">Fechar</button>
         </div>
       </form>
     </dialog>

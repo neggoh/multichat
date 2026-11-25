@@ -44,6 +44,23 @@ const els = {
   localUrl: $('local-url'),
   localStatus: $('local-status'),
   localTest: $('local-test'),
+  localGpu: $('local-gpu'),
+  gpuInfo: $('gpu-info'),
+  preview: $('preview'),
+  previewBtn: $('preview-btn'),
+  previewClose: $('preview-close'),
+  previewTabs: $('preview-tabs'),
+  previewFrame: $('preview-frame'),
+  previewCode: $('preview-code'),
+  previewEmpty: $('preview-empty'),
+  previewCount: $('preview-count'),
+  previewRefresh: $('preview-refresh'),
+  previewZip: $('preview-zip'),
+  toolsBtn: $('tools-btn'),
+  toolsDialog: $('tools-dialog'),
+  toolsList: $('tools-list'),
+  toolsModels: $('tools-models'),
+  toolsScripts: $('tools-scripts'),
 }
 
 const state = {
@@ -59,6 +76,8 @@ const state = {
   localBaseUrl: 'http://127.0.0.1:8080/v1',
   attachments: [],
   attaching: false,
+  previewTab: 'preview',
+  projectFiles: [],
 }
 
 /* ------------------------------- persistência ------------------------------- */
@@ -122,15 +141,20 @@ function inline(text) {
   return out
 }
 
-/** Markdown mínimo e seguro: blocos de código, títulos, listas, negrito e inline code. */
+/** Markdown mínimo e seguro: títulos, listas, negrito e inline code.
+ *  Blocos de código não aparecem no chat: viram uma nota que abre a prévia. */
 function renderMarkdown(source) {
   const parts = String(source ?? '').split(/```/)
   let html = ''
   parts.forEach((chunk, index) => {
     if (index % 2 === 1) {
       const newline = chunk.indexOf('\n')
+      const rawLang = (newline >= 0 ? chunk.slice(0, newline) : '').trim().toLowerCase().split(':')[0]
       const body = newline >= 0 ? chunk.slice(newline + 1) : chunk
-      html += `<pre><button class="copy" type="button">Copiar</button><code>${escapeHtml(body.replace(/\n$/, ''))}</code></pre>`
+      const lang = CODE_LANGS[rawLang] ?? (rawLang || 'txt')
+      const name = guessFileName(lang, body)
+      const lines = body.trim() ? body.replace(/\n$/, '').split('\n').length : 0
+      html += `<div class="code-note"><span class="code-note-icon">▤</span><span class="code-note-text"><strong>${escapeHtml(name)}</strong> · ${lines} linha${lines === 1 ? '' : 's'}</span><button class="open-preview" type="button" data-file="${escapeHtml(name)}">Ver na prévia</button></div>`
       return
     }
     for (const line of chunk.split('\n')) {
@@ -698,7 +722,11 @@ function bind() {
     const url = els.localUrl.value.trim() || 'http://127.0.0.1:8080/v1'
     els.localStatus.className = 'local-status'
     els.localStatus.textContent = 'testando...'
-    await api.saveSettings({ provider: 'local', localBaseUrl: url })
+    await api.saveSettings({
+      provider: 'local',
+      localBaseUrl: url,
+      localGpuLayers: els.localGpu.checked ? 99 : 0,
+    })
     const result = await api.models({ provider: 'local' })
     if (result.ok && result.models.length > 0) {
       els.localStatus.className = 'local-status ok'
@@ -710,6 +738,13 @@ function bind() {
       els.localStatus.className = 'local-status err'
       els.localStatus.textContent = result.error ?? 'não foi possível conectar'
     }
+  })
+  els.localGpu.addEventListener('change', async () => {
+    await api.saveSettings({ localGpuLayers: els.localGpu.checked ? 99 : 0 })
+    els.gpuInfo.className = 'local-status'
+    els.gpuInfo.textContent = els.localGpu.checked
+      ? 'GPU ligada: o modelo será recarregado na próxima mensagem'
+      : 'GPU desligada: processamento na CPU'
   })
   els.input.addEventListener('input', autoGrow)
   els.input.addEventListener('keydown', (event) => {
@@ -723,6 +758,25 @@ function bind() {
     if (anchor) {
       event.preventDefault()
       api.openExternal(anchor.href)
+      return
+    }
+    const openButton = event.target.closest('button.open-preview')
+    if (openButton) {
+      const file = openButton.getAttribute('data-file')
+      els.preview.hidden = false
+      state.previewTab = file || 'preview'
+      renderPreview()
+      return
+    }
+    const copyFile = event.target.closest('button.copy-file')
+    if (copyFile) {
+      const active = (state.projectFiles ?? []).find((file) => file.name === state.previewTab)
+      if (active) {
+        navigator.clipboard.writeText(active.content).then(() => {
+          copyFile.textContent = 'Copiado'
+          setTimeout(() => (copyFile.textContent = 'Copiar'), 1200)
+        })
+      }
       return
     }
     const button = event.target.closest('button.copy')
@@ -746,9 +800,213 @@ function bind() {
   })
 }
 
+/* ------------------------------ projeto/preview ----------------------------- */
+
+const CODE_LANGS = {
+  html: 'html', htm: 'html', css: 'css', scss: 'css', js: 'js', mjs: 'js', jsx: 'jsx',
+  ts: 'ts', tsx: 'tsx', json: 'json', md: 'md', py: 'py', sql: 'sql', sh: 'sh', bash: 'sh',
+  yml: 'yml', yaml: 'yml', xml: 'xml', svg: 'svg', txt: 'txt', vue: 'vue', svelte: 'svelte',
+}
+
+const DEFAULT_NAMES = {
+  html: 'index.html', css: 'styles.css', js: 'script.js', jsx: 'App.jsx', tsx: 'App.tsx',
+  ts: 'app.ts', json: 'data.json', md: 'README.md', py: 'main.py', sql: 'query.sql',
+  sh: 'script.sh', yml: 'config.yml', xml: 'config.xml', svg: 'image.svg', txt: 'notes.txt',
+  vue: 'App.vue', svelte: 'App.svelte',
+}
+
+function guessFileName(lang, body) {
+  const firstLine = body.split('\n').slice(0, 3).join('\n')
+  const comment = firstLine.match(/(?:\/\/|#|<!--|--|\/\*)\s*([\w./-]+\.(?:html|css|js|jsx|tsx|ts|json|md|py|sql|sh|yml|yaml|xml|svg|vue|svelte|txt))/i)
+  if (comment) return comment[1].replace(/^\.\//, '')
+  return DEFAULT_NAMES[lang] ?? 'arquivo.txt'
+}
+
+function uniqueName(name, used) {
+  if (!used.has(name)) return name
+  const dot = name.lastIndexOf('.')
+  const base = dot > 0 ? name.slice(0, dot) : name
+  const extension = dot > 0 ? name.slice(dot) : ''
+  let counter = 2
+  while (used.has(`${base}-${counter}${extension}`)) counter += 1
+  return `${base}-${counter}${extension}`
+}
+
+function collectProject() {
+  const conversation = current()
+  const files = []
+  const used = new Set()
+  for (const message of conversation?.messages ?? []) {
+    if (message.role !== 'assistant') continue
+    const pattern = /```([\w+-]*)\n([\s\S]*?)```/g
+    let match
+    while ((match = pattern.exec(message.content ?? '')) !== null) {
+      const rawLang = (match[1] ?? '').toLowerCase().split(':')[0]
+      const lang = CODE_LANGS[rawLang] ?? (rawLang || 'txt')
+      const body = match[2].replace(/\s+$/, '')
+      if (!body.trim()) continue
+      const name = uniqueName(guessFileName(lang, body), used)
+      used.add(name)
+      files.push({ name, lang, content: body })
+    }
+  }
+  return files
+}
+
+function buildPreviewDocument(files) {
+  const html = files.filter((file) => file.lang === 'html').map((file) => file.content).join('\n')
+  const css = files.filter((file) => file.lang === 'css').map((file) => file.content).join('\n')
+  const js = files.filter((file) => file.lang === 'js').map((file) => file.content).join('\n')
+
+  if (html) {
+    let document = html
+    if (css) {
+      const style = `<style>\n${css}\n</style>`
+      document = /<\/head>/i.test(document) ? document.replace(/<\/head>/i, `${style}\n</head>`) : `${style}\n${document}`
+    }
+    if (js) {
+      const script = `<script>\n${js}\n</script>`
+      document = /<\/body>/i.test(document) ? document.replace(/<\/body>/i, `${script}\n</body>`) : `${document}\n${script}`
+    }
+    return document
+  }
+
+  if (css || js) {
+    return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><style>${css}</style></head><body><div id="app"></div><script>${js}</script></body></html>`
+  }
+
+  return ''
+}
+
+function renderPreview() {
+  const files = collectProject()
+  state.projectFiles = files
+  els.previewCount.textContent = `${files.length} arquivo${files.length === 1 ? '' : 's'}`
+
+  const tabs = [{ id: 'preview', label: 'Prévia' }, ...files.map((file) => ({ id: file.name, label: file.name }))]
+  els.previewTabs.innerHTML = ''
+  for (const tab of tabs) {
+    const button = document.createElement('button')
+    button.className = `preview-tab${state.previewTab === tab.id ? ' active' : ''}`
+    button.textContent = tab.label
+    button.title = tab.label
+    button.addEventListener('click', () => {
+      state.previewTab = tab.id
+      renderPreview()
+    })
+    els.previewTabs.append(button)
+  }
+
+  const active = files.find((file) => file.name === state.previewTab)
+  const showCode = Boolean(active)
+
+  els.previewEmpty.hidden = files.length > 0
+  els.previewFrame.hidden = showCode || files.length === 0
+  els.previewCode.hidden = !showCode
+
+  if (showCode) {
+    const lines = active.content.split('\n')
+    const rows = lines
+      .map((line, index) => `<div class="code-line"><span class="ln">${index + 1}</span><code>${escapeHtml(line) || ' '}</code></div>`)
+      .join('')
+    els.previewCode.innerHTML = `<div class="code-head"><span class="code-file">${escapeHtml(active.name)}</span><span class="code-meta">${lines.length} linha${lines.length === 1 ? '' : 's'} · ${active.lang}</span><span class="spacer"></span><button class="copy-file" type="button">Copiar</button></div><div class="code-scroll">${rows}</div>`
+  } else if (files.length > 0) {
+    els.previewFrame.hidden = false
+    els.previewEmpty.hidden = true
+    const payload = files.map((file) => ({ name: file.name, content: file.content }))
+    api.servePreview({ files: payload }).then((result) => {
+      if (result.ok) {
+        if (els.previewFrame.getAttribute('src') !== result.url) els.previewFrame.src = result.url
+        els.previewEmpty.hidden = true
+        els.previewFrame.hidden = false
+      } else {
+        els.previewFrame.hidden = true
+        els.previewEmpty.hidden = false
+        els.previewEmpty.textContent = result.error ?? 'não foi possível montar a prévia'
+      }
+    })
+  }
+}
+
+function openPreview() {
+  els.preview.hidden = false
+  state.previewTab = 'preview'
+  renderPreview()
+}
+
+async function exportProject() {
+  const files = state.projectFiles?.length ? state.projectFiles : collectProject()
+  if (files.length === 0) {
+    setStatus('nenhum arquivo no projeto ainda')
+    return
+  }
+  const conversation = current()
+  const result = await api.exportProject({
+    name: conversation?.title ?? 'projeto',
+    files: files.map((file) => ({ name: file.name, content: file.content })),
+  })
+  if (result.ok && !result.canceled) setStatus(`ZIP salvo com ${result.count} arquivo(s)`)
+  else if (result.ok === false) setStatus(result.error ?? 'não foi possível salvar')
+}
+
+const TOOLS = [
+  { icon: '🧠', title: 'Dois provedores', text: 'OpenRouter (nuvem) ou IA local sem cota, alternáveis no topo.' },
+  { icon: '📎', title: 'Anexos', text: 'ZIP, APK, PDF, imagem, código, JSON, XML, CSV e texto — até 40 MB por arquivo.' },
+  { icon: '▤', title: 'Prévia de projeto', text: 'Blocos de código viram uma página navegável antes de hospedar.' },
+  { icon: '📦', title: 'Download do projeto', text: 'Exporta todos os arquivos gerados em um ZIP.' },
+  { icon: '⚡', title: 'GPU opcional', text: 'Com uma NVIDIA, as camadas do modelo vão para a placa (CUDA).' },
+  { icon: '🔒', title: 'Chave protegida', text: 'Criptografada pelo Windows (DPAPI), usada só no processo principal.' },
+]
+
+function bindPreview() {
+  els.previewBtn.addEventListener('click', () => {
+    if (els.preview.hidden) openPreview()
+    else els.preview.hidden = true
+  })
+  els.previewClose.addEventListener('click', () => {
+    els.preview.hidden = true
+  })
+  els.previewRefresh.addEventListener('click', () => {
+    state.previewTab = 'preview'
+    renderPreview()
+  })
+  els.previewZip.addEventListener('click', exportProject)
+  els.previewCode.addEventListener('click', (event) => {
+    const button = event.target.closest('button.copy-file')
+    if (!button) return
+    const active = (state.projectFiles ?? []).find((file) => file.name === state.previewTab)
+    if (!active) return
+    navigator.clipboard.writeText(active.content).then(() => {
+      button.textContent = 'Copiado'
+      setTimeout(() => (button.textContent = 'Copiar'), 1200)
+    })
+  })
+
+  els.toolsBtn.addEventListener('click', async () => {
+    els.toolsList.innerHTML = ''
+    for (const tool of TOOLS) {
+      const item = document.createElement('li')
+      item.innerHTML = `<span class="tool-icon">${tool.icon}</span><div><strong>${escapeHtml(tool.title)}</strong><p>${escapeHtml(tool.text)}</p></div>`
+      els.toolsList.append(item)
+    }
+    els.toolsDialog.showModal()
+  })
+  els.toolsModels.addEventListener('click', async () => {
+    const settings = await api.settings()
+    const result = await api.openPath(settings.dir)
+    if (result.ok === false) setStatus(result.error ?? 'não foi possível abrir a pasta')
+  })
+  els.toolsScripts.addEventListener('click', async () => {
+    const settings = await api.settings()
+    const result = await api.openPath(`${settings.dir}/scripts`)
+    if (result.ok === false) setStatus('pasta de scripts não encontrada')
+  })
+}
+
 async function boot() {
   loadState()
   bind()
+  bindPreview()
   renderModels()
   renderConversations()
   renderMessages()
@@ -775,7 +1033,20 @@ async function boot() {
   state.localBaseUrl = settings.localBaseUrl ?? state.localBaseUrl
   els.provider.value = state.provider
   els.localUrl.value = state.localBaseUrl
+  els.localGpu.checked = Number(settings.gpuLayers ?? 0) > 0
   if (settings.model) state.selectedModel = settings.model
+
+  const gpu = await api.gpu()
+  els.gpuInfo.className = 'local-status'
+  if (gpu.vendor === 'nvidia') {
+    els.gpuInfo.textContent = `${gpu.backend} · ${gpu.name}${gpu.memory ? ` (${gpu.memory})` : ''}`
+    els.localGpu.disabled = false
+  } else {
+    els.gpuInfo.textContent = 'nenhuma GPU NVIDIA detectada — processando na CPU'
+    els.localGpu.disabled = true
+    els.localGpu.checked = false
+  }
+
   await loadModels(state.provider)
 
   if (state.hasKey) await loadModels('openrouter')
